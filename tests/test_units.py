@@ -1,0 +1,265 @@
+"""阶段 A 单测：stt / llm / tts 三个模块。
+
+原则：不装重依赖、不联网、不需要 API key —— 全部通过模块里预留的接缝打桩。
+    llm  → 打桩 llm._get_client
+    stt  → 打桩 stt._get_model
+    tts  → 往 sys.modules 塞一个假的 edge_tts
+"""
+from __future__ import annotations
+
+import base64
+import json
+import sys
+import types
+
+import pytest
+
+from app import llm, stt, tts
+
+# ---------------------------------------------------------------- llm: 拼消息
+
+
+def test_build_messages_结构正确():
+    msgs = llm.build_messages(
+        history=[{"role": "assistant", "content": "请自我介绍"}],
+        answer="我叫张三",
+        frames=[b"\xff\xd8fake-jpeg"],
+    )
+
+    assert msgs[0]["role"] == "system"
+    assert msgs[1] == {"role": "assistant", "content": "请自我介绍"}
+    assert msgs[2]["role"] == "user"
+
+    content = msgs[2]["content"]
+    assert isinstance(content, list)
+    # 第一段是文字，且带上了候选人的回答
+    assert content[0]["type"] == "text"
+    assert "我叫张三" in content[0]["text"]
+    # 最后一段是图片，base64 编码正确
+    image_part = content[-1]
+    assert image_part["type"] == "image_url"
+    assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    b64 = image_part["image_url"]["url"].split(",", 1)[1]
+    assert base64.b64decode(b64) == b"\xff\xd8fake-jpeg"
+
+
+def test_build_messages_无画面也能工作():
+    msgs = llm.build_messages([], "回答", [])
+    content = msgs[-1]["content"]
+    assert all(part["type"] == "text" for part in content)
+    assert "没有采集到画面帧" in content[-1]["text"]
+
+
+def test_build_messages_空回答标记为没有说话():
+    msgs = llm.build_messages([], "", [])
+    assert "候选人没有说话" in msgs[-1]["content"][0]["text"]
+
+
+# ---------------------------------------------------------------- llm: 解析回复
+
+GOOD_REPLY = {
+    "evaluation": {"score": 8, "comment": "表达清晰"},
+    "attention": {"focused": True, "note": "正对镜头"},
+    "cheating_suspected": False,
+    "next_question": "能具体讲讲吗？",
+    "should_end": False,
+}
+
+
+def test_parse_reply_标准_json():
+    got = llm.parse_reply(json.dumps(GOOD_REPLY, ensure_ascii=False))
+    assert got["evaluation"]["score"] == 8
+    assert got["next_question"] == "能具体讲讲吗？"
+    assert got["cheating_suspected"] is False
+    assert got["_parsed"] is True
+
+
+def test_parse_reply_容忍_markdown_围栏():
+    raw = f"```json\n{json.dumps(GOOD_REPLY, ensure_ascii=False)}\n```"
+    assert llm.parse_reply(raw)["evaluation"]["score"] == 8
+
+
+def test_parse_reply_容忍前后多余文字():
+    raw = f"好的，这是我的判断：{json.dumps(GOOD_REPLY, ensure_ascii=False)} 希望有帮助"
+    assert llm.parse_reply(raw)["next_question"] == "能具体讲讲吗？"
+
+
+def test_parse_reply_补全缺失字段():
+    got = llm.parse_reply('{"next_question": "下一题"}')
+    assert got["next_question"] == "下一题"
+    assert got["evaluation"]["score"] is None      # 缺失 → None
+    assert got["attention"]["focused"] is True    # 缺失 → 默认专注
+    assert got["cheating_suspected"] is False
+
+
+def test_parse_reply_字符串分数转成整数():
+    got = llm.parse_reply('{"evaluation": {"score": "7"}}')
+    assert got["evaluation"]["score"] == 7
+
+
+def test_parse_reply_彻底解析失败时兜底不抛异常():
+    got = llm.parse_reply("模型今天不想输出 JSON")
+    assert got["_parsed"] is False
+    # 兜底把原文当问题，面试流程不中断
+    assert got["next_question"] == "模型今天不想输出 JSON"
+    assert got["should_end"] is False
+
+
+def test_parse_reply_空字符串也不崩():
+    got = llm.parse_reply("")
+    assert got["next_question"]  # 有默认问题
+    assert got["_parsed"] is False
+
+
+# ---------------------------------------------------------------- llm: 调用
+
+class _FakeCompletions:
+    def __init__(self, content: str, recorder: dict):
+        self._content = content
+        self._recorder = recorder
+
+    def create(self, **kwargs):
+        self._recorder.update(kwargs)
+        msg = types.SimpleNamespace(content=self._content)
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+
+class _FakeClient:
+    def __init__(self, content: str, recorder: dict):
+        self.chat = types.SimpleNamespace(
+            completions=_FakeCompletions(content, recorder)
+        )
+
+
+def test_chat_走通并回传结构化结果(monkeypatch):
+    recorder: dict = {}
+    payload = json.dumps(GOOD_REPLY, ensure_ascii=False)
+    monkeypatch.setattr(llm, "_get_client", lambda: _FakeClient(payload, recorder))
+
+    got = llm.chat([], "我叫张三", [b"frame"])
+
+    assert got["evaluation"]["score"] == 8
+    # 验证请求参数确实带上了图片
+    sent = recorder["messages"][-1]["content"]
+    assert any(p["type"] == "image_url" for p in sent)
+    assert recorder["temperature"] == 0.7
+
+
+def test_chat_可关闭_json_mode(monkeypatch):
+    recorder: dict = {}
+    monkeypatch.setattr(llm, "_get_client", lambda: _FakeClient("{}", recorder))
+
+    monkeypatch.setattr(llm.config, "LLM_JSON_MODE", False)
+    llm.chat([], "回答", [])
+    assert "response_format" not in recorder
+
+    monkeypatch.setattr(llm.config, "LLM_JSON_MODE", True)
+    llm.chat([], "回答", [])
+    assert recorder["response_format"] == {"type": "json_object"}
+
+
+# ---------------------------------------------------------------- stt
+
+class _FakeSegment:
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _FakeWhisperModel:
+    def __init__(self, texts, recorder: dict):
+        self._texts = texts
+        self._recorder = recorder
+
+    def transcribe(self, audio, **kwargs):
+        self._recorder["audio"] = audio
+        self._recorder["kwargs"] = kwargs
+        return [_FakeSegment(t) for t in self._texts], {"language": "zh"}
+
+
+def test_transcribe_拼接分段并去空白(monkeypatch):
+    recorder: dict = {}
+    fake = _FakeWhisperModel([" 你好，", "我是张三。 "], recorder)
+    monkeypatch.setattr(stt, "_get_model", lambda: fake)
+
+    assert stt.transcribe(b"fake-audio-bytes") == "你好，我是张三。"
+    assert recorder["kwargs"]["language"] == "zh"
+    assert recorder["kwargs"]["vad_filter"] is True
+
+
+def test_transcribe_空输入直接返回空串(monkeypatch):
+    def _boom():
+        raise AssertionError("空输入不应该去加载模型")
+
+    monkeypatch.setattr(stt, "_get_model", _boom)
+    assert stt.transcribe(b"") == ""
+
+
+def test_标点归一化成全角():
+    assert stt._normalize("你好﹐我是张三.") == "你好，我是张三."
+    assert stt._normalize("真的吗﹖太好了﹗") == "真的吗？太好了！"
+    assert stt._normalize("a,b;c") == "a，b；c"
+
+
+def test_transcribe_结果已归一化(monkeypatch):
+    fake = _FakeWhisperModel(["你好﹐", "我是张三"], {})
+    monkeypatch.setattr(stt, "_get_model", lambda: fake)
+    assert stt.transcribe(b"x") == "你好，我是张三"
+
+
+def test_transcribe_模型只加载一次(monkeypatch):
+    """_get_model 内部的缓存逻辑：连续调用应复用同一个实例。"""
+    calls = []
+
+    class _Loader:
+        def __init__(self, *a, **kw):
+            calls.append(1)
+
+    fake_module = types.SimpleNamespace(WhisperModel=_Loader)
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+    monkeypatch.setattr(stt, "_model", None)
+
+    first = stt._get_model()
+    second = stt._get_model()
+
+    assert first is second
+    assert len(calls) == 1
+
+
+# ---------------------------------------------------------------- tts
+
+def _install_fake_edge_tts(monkeypatch, chunks, recorder: dict):
+    class _FakeCommunicate:
+        def __init__(self, text, voice):
+            recorder["text"] = text
+            recorder["voice"] = voice
+
+        async def stream(self):
+            for c in chunks:
+                yield c
+
+    monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(Communicate=_FakeCommunicate))
+
+
+def test_synthesize_只拼接音频分片(monkeypatch):
+    recorder: dict = {}
+    _install_fake_edge_tts(
+        monkeypatch,
+        [
+            {"type": "audio", "data": b"AAA"},
+            {"type": "WordBoundary", "data": b"SHOULD-BE-IGNORED"},
+            {"type": "audio", "data": b"BBB"},
+        ],
+        recorder,
+    )
+
+    assert tts.synthesize("你好") == b"AAABBB"
+    assert recorder["text"] == "你好"
+
+
+def test_synthesize_空文字不调用合成(monkeypatch):
+    recorder: dict = {}
+    _install_fake_edge_tts(monkeypatch, [], recorder)
+
+    assert tts.synthesize("") == b""
+    assert tts.synthesize("   ") == b""
+    assert "text" not in recorder  # 压根没发起合成

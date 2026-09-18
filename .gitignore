@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# 模型缓存（faster-whisper 下载的权重）
+.cache/
+*.bin
+
+# 运行产物
+reports/*.json
+reports/*.md
+!reports/.gitkeep
+
+# 本地配置与密钥
+.env
+.env.local
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store

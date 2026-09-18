@@ -1,0 +1,18 @@
+# ---- 服务端 ----
+fastapi>=0.115
+uvicorn[standard]>=0.32
+python-multipart>=0.0.12
+
+# ---- 语音识别（听）----
+faster-whisper>=1.1.0
+
+# ---- 语音合成（说）----
+edge-tts>=7.0.0
+
+# ---- 多模态 LLM（看 + 想）----
+# OpenAI 兼容 SDK：官方留空 LLM_BASE_URL；国内换 DashScope 兼容模式地址即可
+openai>=1.55
+
+# ---- 测试 ----
+pytest>=8.3
+pillow>=11.0          # 仅用于生成/处理 tests/fixtures 下的样本图
