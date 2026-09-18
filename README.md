@@ -9,7 +9,7 @@
 | 后端 | FastAPI | 轻量，一条命令起服务 |
 | 前端 | 原生 HTML + JS 单页 | `getUserMedia` 拿摄像头 + 麦克风，无需框架 |
 | 语音识别 STT | faster-whisper | 本地免费、中英文，整段转文字 |
-| 多模态 LLM | GPT-4o-mini（默认）/ Qwen-VL-Max（国内替代） | 文本 + 图片输入、中文强、便宜 |
+| 多模态 LLM | **Qwen-VL-Max**（阿里通义，走 DashScope 兼容模式） | 文本 + 图片输入、中文强、国内直连 |
 | 语音合成 TTS | edge-tts | 免费、中文音色自然、无需 key |
 | 测试 | pytest | 单测 + 集成 + dry-run |
 | 编排 | 纯 Python 状态机 | 不引入 LangChain / VAD |
@@ -171,17 +171,31 @@ export HF_HUB_DISABLE_XET=1
 - 错字属模型能力问题，**架构上已容忍**：`llm.py` 的系统提示里明确告诉 LLM「转写可能有错别字，请合理理解」
 - 若要更好的中文精度，换 SenseVoice / FunASR（见下方「可替换点」）
 
-### 4. LLM 密钥配置
+### 4. LLM 密钥配置（本项目用 Qwen-VL-Max）
 
 ```bash
-# OpenAI 官方
-export LLM_API_KEY=sk-xxx
-
-# 或国内通义千问（改环境变量即可，不用改代码）
-export LLM_API_KEY=sk-xxx
-export LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-export LLM_MODEL=qwen-vl-max
+cp .env.example .env
+# 然后编辑 .env，填入 DashScope 密钥
 ```
+
+`.env` 内容（`app/config.py` 会自动加载，已加进 `.gitignore` 不会外泄）：
+
+```
+LLM_API_KEY=sk-你的DashScope密钥
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen-vl-max
+```
+
+配好后跑冒烟测试，真实调用一次验证「看画面」的能力（会消耗少量额度）：
+
+```bash
+.venv/bin/python -m app.check_llm
+```
+
+它会拿**同一段回答**分别配专注 / 走神 / 空座 / 多人 四种画面，
+对比模型给出的 `focused` 与 `cheating_suspected` 是否随画面变化 —— 全都一样就说明它没在「看」。
+
+> 完整测试说明：`pytest` 不需要 key（全部打桩）；只有 `check_llm` 会真实调 LLM。
 
 ## 关键依赖
 
