@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HrAgent · 多模态 AI 面试官</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --line: #e3e6ea;
+    --text: #1f2328;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --ok: #059669;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 24px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .mode {
+    margin-left: auto;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fde68a;
+  }
+
+  main {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 16px;
+    padding: 16px 24px 24px;
+    align-items: start;
+    max-width: 1280px;
+    margin: 0 auto;
+  }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    margin: 0 0 10px;
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  /* 模拟摄像头 */
+  .camera {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: #111827;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .camera img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .camera .placeholder { color: #6b7280; font-size: 13px; }
+  .camera .badge {
+    position: absolute;
+    top: 8px; left: 8px;
+    background: rgba(0,0,0,.6);
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  select, button {
+    font: inherit;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--text);
+  }
+  button {
+    cursor: pointer;
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    font-weight: 500;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.ghost { background: #fff; color: var(--text); border-color: var(--line); }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row button { margin: 0; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+
+  /* 对话记录 */
+  #log { display: flex; flex-direction: column; gap: 12px; min-height: 200px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
+  .turn { border-left: 3px solid var(--line); padding-left: 12px; }
+  .turn.q { border-color: var(--accent); }
+  .who { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .text { white-space: pre-wrap; }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #f1f3f5;
+    color: #495057;
+    border: 1px solid var(--line);
+  }
+  .tag.ok { background: #ecfdf5; color: var(--ok); border-color: #a7f3d0; }
+  .tag.warn { background: #fffbeb; color: var(--warn); border-color: #fde68a; }
+  .tag.danger { background: #fef2f2; color: var(--danger); border-color: #fecaca; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .status { font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 18px; }
+  .status.err { color: var(--danger); }
+  .spinner::after {
+    content: "";
+    display: inline-block;
+    width: 10px; height: 10px;
+    margin-left: 6px;
+    border: 2px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: -1px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* 报告 */
+  #report { display: none; margin-top: 16px; }
+  #report pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 14px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.65;
+    margin: 0;
+    white-space: pre-wrap;
+  }
+  .summary { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 12px; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .stat .v { font-size: 20px; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HrAgent</h1>
+  <span class="sub">多模态 AI 面试官 · 看画面 + 听回答</span>
+  <span class="mode" id="modeBadge">模拟数据模式</span>
+</header>
+
+<main>
+  <!-- 左：画面 + 控制 -->
+  <section class="panel">
+    <h2>候选人画面</h2>
+    <div class="camera">
+      <span class="badge">模拟</span>
+      <span class="placeholder" id="camPlaceholder">尚未开始</span>
+      <img id="cam" alt="候选人画面" hidden>
+    </div>
+
+    <label for="frameSel">模拟画面</label>
+    <select id="frameSel"></select>
+
+    <label for="audioSel">模拟回答音频</label>
+    <select id="audioSel"></select>
+
+    <div class="row">
+      <button id="startBtn">开始面试</button>
+      <button id="sendBtn" disabled>发送回答</button>
+    </div>
+    <div class="row">
+      <button id="reportBtn" class="ghost" disabled>查看报告</button>
+    </div>
+
+    <div class="status" id="status"></div>
+    <p class="hint">
+      当前为<strong>模拟数据模式</strong>：画面取自 fixture 图片，回答取自 fixture 音频。
+      接入真实摄像头 / 麦克风后，只需替换采集部分，发送链路不变。
+    </p>
+  </section>
+
+  <!-- 右：对话 -->
+  <section class="panel">
+    <h2>面试记录</h2>
+    <div id="log"><div class="empty">点击「开始面试」后，面试官会先提问。</div></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const cam = $("cam"), camPlaceholder = $("camPlaceholder");
+const frameSel = $("frameSel"), audioSel = $("audioSel");
+const startBtn = $("startBtn"), sendBtn = $("sendBtn"), reportBtn = $("reportBtn");
+const log = $("log"), statusEl = $("status");
+
+let started = false;
+let busy = false;
+
+// ---------------------------------------------------------------- 工具
+
+function setStatus(msg, isErr) {
+  statusEl.textContent = msg || "";
+  statusEl.className = "status" + (isErr ? " err" : "");
+}
+
+function setBusy(on, msg) {
+  busy = on;
+  startBtn.disabled = on || started;
+  sendBtn.disabled = on || !started;
+  reportBtn.disabled = on || !started;
+  statusEl.className = "status" + (on ? " spinner" : "");
+  if (on) statusEl.textContent = msg || "处理中…";
+}
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function clearEmpty() {
+  const e = log.querySelector(".empty");
+  if (e) e.remove();
+}
+
+function addTurn(kind, who, text, tags) {
+  clearEmpty();
+  const box = el("div", "turn " + kind);
+  box.appendChild(el("div", "who", who));
+  box.appendChild(el("div", "text", text));
+  if (tags && tags.length) {
+    const meta = el("div", "meta");
+    tags.forEach(([label, cls]) => meta.appendChild(el("span", "tag " + (cls || ""), label)));
+    box.appendChild(meta);
+  }
+  log.appendChild(box);
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  return box;
+}
+
+// 把 base64 音频播出来
+function playB64(b64) {
+  if (!b64) return;
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+  const audio = new Audio(url);
+  audio.onended = () => URL.revokeObjectURL(url);
+  audio.play().catch(() => { /* 浏览器可能拦截自动播放，忽略 */ });
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || (res.status + " " + res.statusText));
+  return data;
+}
+
+// ---------------------------------------------------------------- 画面
+
+function showFrame(name) {
+  if (!name) return;
+  cam.src = "/fixtures/frames/" + encodeURIComponent(name);
+  cam.hidden = false;
+  camPlaceholder.hidden = true;
+}
+
+frameSel.addEventListener("change", () => showFrame(frameSel.value));
+
+// ---------------------------------------------------------------- 流程
+
+async function loadFixtures() {
+  const data = await api("/api/fixtures");
+  for (const n of data.frames) frameSel.appendChild(new Option(n, n));
+  for (const n of data.audio) audioSel.appendChild(new Option(n, n));
+  // 默认选一张正对的，另提示 multiple 那张会触发作弊判定
+  const preferred = data.frames.find((n) => n.startsWith("focused")) || data.frames[0];
+  if (preferred) { frameSel.value = preferred; showFrame(preferred); }
+}
+
+async function startInterview() {
+  setBusy(true, "正在开始…");
+  try {
+    const data = await api("/api/start", { method: "POST" });
+    started = true;
+    log.innerHTML = "";
+    addTurn("q", "面试官", data.question);
+    playB64(data.audio);
+    $("report").style.display = "none";
+    setStatus("面试已开始，选好模拟画面和回答音频后点「发送回答」。");
+  } catch (err) {
+    setStatus("开始失败：" + err.message, true);
+  } finally {
+    setBusy(false);
+    startBtn.disabled = started;
+  }
+}
+
+async function sendAnswer() {
+  const frameName = frameSel.value;
+  const audioName = audioSel.value;
+  if (!frameName || !audioName) { setStatus("请先选择模拟画面和音频", true); return; }
+
+  setBusy(true, "面试官正在看和听…（真实模型约需 10-20 秒）");
+  try {
+    // 取模拟素材 —— 真实模式下这里换成 MediaRecorder 录出来的 Blob
+    const [audioBlob, frameBlob] = await Promise.all([
+      fetch("/fixtures/audio/" + encodeURIComponent(audioName)).then((r) => r.blob()),
+      fetch("/fixtures/frames/" + encodeURIComponent(frameName)).then((r) => r.blob()),
+    ]);
+
+    const form = new FormData();
+    form.append("audio", audioBlob, audioName);
+    form.append("frames", frameBlob, frameName);
+
+    const data = await api("/api/turn", { method: "POST", body: form });
+
+    const tags = [];
+    tags.push(["得分 " + (data.score ?? "—"), ""]);
+    tags.push([data.focused ? "专注" : "走神", data.focused ? "ok" : "warn"]);
+    if (data.cheating) tags.push(["疑似作弊", "danger"]);
+
+    const box = addTurn("a", "候选人（语音转写）", data.answer || "（未识别到语音）", tags);
+    if (data.comment) box.appendChild(el("div", "note", "点评：" + data.comment));
+    if (data.attention_note) box.appendChild(el("div", "note", "画面：" + data.attention_note));
+
+    addTurn("q", "面试官", data.question);
+    playB64(data.audio);
+
+    if (data.finished) {
+      setStatus("面试已结束，可以查看报告了。");
+      sendBtn.disabled = true;
+      reportBtn.disabled = false;
+    } else {
+      setStatus("已处理完这一轮，可以继续发送。");
+    }
+  } catch (err) {
+    setStatus("处理失败：" + err.message, true);
+  } finally {
+    setBusy(false);
+    sendBtn.disabled = !started;
+  }
+}
+
+async function showReport() {
+  setBusy(true, "正在生成报告…");
+  try {
+    const data = await api("/api/report");
+    const panel = $("report");
+    panel.innerHTML = "";
+
+    const sum = el("div", "summary");
+    const stats = [
+      ["轮数", data.turns],
+      ["平均分", data.average_score ?? "—"],
+      ["走神轮次", data.distracted_turns.length ? data.distracted_turns.join("、") : "无"],
+      ["疑似作弊", data.cheating_turns.length ? data.cheating_turns.join("、") : "无"],
+    ];
+    for (const [k, v] of stats) {
+      const s = el("div", "stat");
+      s.appendChild(el("div", "k", k));
+      s.appendChild(el("div", "v", String(v)));
+      sum.appendChild(s);
+    }
+    panel.appendChild(sum);
+
+    const conc = el("div", "note");
+    conc.innerHTML = "<strong>结论：</strong>";
+    conc.appendChild(document.createTextNode(data.recommendation));
+    panel.appendChild(conc);
+
+    panel.appendChild(el("pre", "", data.markdown));
+    panel.style.display = "block";
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    setStatus("报告已生成。");
+  } catch (err) {
+    setStatus("生成报告失败：" + err.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+// ---------------------------------------------------------------- 绑定
+
+startBtn.addEventListener("click", startInterview);
+sendBtn.addEventListener("click", sendAnswer);
+reportBtn.addEventListener("click", showReport);
+
+// 报告容器需要在对话面板下方，动态插入
+(function mountReport() {
+  const panel = document.createElement("div");
+  panel.id = "report";
+  panel.className = "panel";
+  panel.style.gridColumn = "1 / -1";
+  document.querySelector("main").appendChild(panel);
+})();
+
+loadFixtures().catch((e) => setStatus("加载模拟素材失败：" + e.message, true));
+</script>
+</body>
+</html>
