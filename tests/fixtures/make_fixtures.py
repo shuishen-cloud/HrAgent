@@ -53,15 +53,36 @@ def _draw_person(img, cx: int, head_r: int, facing: str = "front") -> None:
     # 头
     d.ellipse([cx - head_r, H - 210 - head_r * 2, cx + head_r, H - 210], fill=SKIN)
 
+    head_cy = H - 210 - head_r  # 头部圆心
+
     if facing == "side":
-        # 侧头：五官整体偏移到一侧，明显不看镜头
-        off = int(head_r * 0.55)
-        d.ellipse([cx - head_r * 0.35 + off, H - 210 - head_r * 1.4,
-                   cx - head_r * 0.05 + off, H - 210 - head_r * 1.15], fill=DARK)
-        d.ellipse([cx + head_r * 0.15 + off, H - 210 - head_r * 1.4,
-                   cx + head_r * 0.45 + off, H - 210 - head_r * 1.15], fill=DARK)
-        d.arc([cx - head_r * 0.5 + off, H - 210 - head_r * 0.95,
-               cx + head_r * 0.5 + off, H - 210 - head_r * 0.4], 200, 340, fill=DARK, width=5)
+        # 侧脸朝右：鼻梁凸出 + 只露一只眼 + 后脑勺的耳朵。
+        # 关键是让「头本身转了」，而不只是眼睛偏移 —— 否则人看也认为它是朝前的。
+        d.polygon(
+            [
+                (cx + head_r * 0.75, head_cy - head_r * 0.15),
+                (cx + head_r * 1.45, head_cy + head_r * 0.22),
+                (cx + head_r * 0.72, head_cy + head_r * 0.5),
+            ],
+            fill=SKIN,
+        )
+        # 唯一可见的那只眼，靠右
+        d.ellipse(
+            [cx + head_r * 0.3, head_cy - head_r * 0.3,
+             cx + head_r * 0.58, head_cy - head_r * 0.06],
+            fill=DARK,
+        )
+        # 后脑的头发（先画，别盖住耳朵）
+        d.chord(
+            [cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r],
+            100, 260, fill=DARK,
+        )
+        # 耳朵，靠左（后脑侧）
+        d.ellipse(
+            [cx - head_r * 0.95, head_cy - head_r * 0.05,
+             cx - head_r * 0.6, head_cy + head_r * 0.35],
+            fill=SKIN, outline=DARK, width=3,
+        )
     else:
         # 正对：两眼居中 + 微笑
         d.ellipse([cx - head_r * 0.5, H - 210 - head_r * 1.4,
