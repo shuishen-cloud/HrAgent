@@ -147,16 +147,21 @@ uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
 
 ## 环境与已知问题（本机实测）
 
-### 1. faster-whisper 首次运行要下模型，HuggingFace 直连不通
+### 1. 加载 Whisper 模型会卡死在联网检查上（已在代码里修掉）
 
-国内网络下 `huggingface.co` 及 xet 存储后端不可达，必须走镜像并禁用 xet：
+**症状**：跑到第一轮 STT 就停住不动 —— 不报错、不退出，看着像死循环。
 
-```bash
-export HF_ENDPOINT=https://hf-mirror.com
-export HF_HUB_DISABLE_XET=1
-```
+**原因**：模型即使已经缓存到本地，`huggingface_hub` 加载时**仍会联网检查有没有新版本**。
+国内连不上 `huggingface.co`，而且是「丢包挂起」不是「快速失败」，于是进程一直等。
 
-（模型只下一次，缓存在 `~/.cache/huggingface`。若只跑 `pytest` 则不需要——单测全打桩。）
+**已修**：`stt.py` 加载模型时**先走离线模式**（只用本地缓存，秒开不碰网络）；
+只有本地确实没缓存、离线加载失败时，才回退到联网下载，并自动指向 `HF_ENDPOINT`
+（默认 `https://hf-mirror.com`）。环境变量只在加载期间生效，用完还原。
+
+**所以你不需要手动 export 任何东西。** 首次下载模型才需要网络。
+
+> 如果哪天缓存被清了又下不动，可以手动 `export HF_ENDPOINT=https://hf-mirror.com
+> HF_HUB_DISABLE_XET=1`（xet 存储后端在国内也不通）再跑一次。
 
 ### 2. ctranslate2 多线程会导致进程崩溃（已规避）
 

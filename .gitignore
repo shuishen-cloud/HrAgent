@@ -10,9 +10,8 @@ venv/
 .cache/
 *.bin
 
-# 运行产物
-reports/*.json
-reports/*.md
+# 运行产物（报告、面试官语音）—— 是输出不是源码，不入库
+reports/*
 !reports/.gitkeep
 
 # 本地配置与密钥

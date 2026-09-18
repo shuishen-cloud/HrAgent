@@ -60,6 +60,12 @@ STT_INITIAL_PROMPT = os.getenv("STT_INITIAL_PROMPT", "以下是普通话的面�
 # 固定单线程换稳定。机器上跑得动的话可以调大，例如 STT_CPU_THREADS=4
 STT_CPU_THREADS = int(os.getenv("STT_CPU_THREADS", "1"))
 
+# ---- HuggingFace（只影响首次下载 Whisper 模型）----
+# 国内直连 huggingface.co 不通，且是「挂起」不是「快速失败」，
+# 会导致加载模型时无限等待。代码里已默认优先走本地缓存（离线模式），
+# 只有本地没有缓存、需要下载时才会用到下面这个镜像地址。
+HF_ENDPOINT = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
+
 # ---- 语音合成 TTS（说）----
 TTS_VOICE = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 
