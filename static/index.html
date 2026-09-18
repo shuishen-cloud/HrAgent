@@ -231,23 +231,35 @@ const frameSel = $("frameSel"), audioSel = $("audioSel");
 const startBtn = $("startBtn"), sendBtn = $("sendBtn"), reportBtn = $("reportBtn");
 const log = $("log"), statusEl = $("status");
 
-let started = false;
-let busy = false;
+// 唯一的界面状态源。按钮可不可点一律由 refreshButtons() 派生，
+// 避免出现「某处禁用、另一处又启用」互相覆盖的情况（之前就是这么出的 bug）。
+const state = { started: false, finished: false, turns: 0, busy: false };
 
 // ---------------------------------------------------------------- 工具
 
 function setStatus(msg, isErr) {
   statusEl.textContent = msg || "";
-  statusEl.className = "status" + (isErr ? " err" : "");
+  // 用 classList 而不是整体赋值 className，否则会把 spinner 类一起抹掉
+  statusEl.classList.toggle("err", !!isErr);
+}
+
+function refreshButtons() {
+  const b = state.busy;
+  startBtn.disabled = b;
+  // 结束后不能再发；没开始也不能发
+  sendBtn.disabled = b || !state.started || state.finished;
+  // 一轮都没答时后端会返回 409，所以直接禁用，别让用户点了才报错
+  reportBtn.disabled = b || state.turns === 0;
+  // 请求飞行中锁住下拉框：否则用户中途改选项，屏幕显示的帧和实际提交的帧会对不上
+  frameSel.disabled = b;
+  audioSel.disabled = b;
 }
 
 function setBusy(on, msg) {
-  busy = on;
-  startBtn.disabled = on || started;
-  sendBtn.disabled = on || !started;
-  reportBtn.disabled = on || !started;
-  statusEl.className = "status" + (on ? " spinner" : "");
-  if (on) statusEl.textContent = msg || "处理中…";
+  state.busy = on;
+  statusEl.classList.toggle("spinner", on);
+  if (on) setStatus(msg || "处理中…");
+  refreshButtons();
 }
 
 function el(tag, cls, text) {
@@ -278,26 +290,68 @@ function addTurn(kind, who, text, tags) {
 }
 
 // 把 base64 音频播出来
-function playB64(b64) {
-  if (!b64) return;
-  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
-  const audio = new Audio(url);
-  audio.onended = () => URL.revokeObjectURL(url);
-  audio.play().catch(() => { /* 浏览器可能拦截自动播放，忽略 */ });
+let currentAudio = null;   // 持有引用：否则 Audio 对象可能在播放途中被 GC 掉
+
+function stopAudio() {
+  if (!currentAudio) return;
+  currentAudio.pause();
+  URL.revokeObjectURL(currentAudio.src);
+  currentAudio = null;
 }
 
-async function api(path, opts) {
-  const res = await fetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || (res.status + " " + res.statusText));
-  return data;
+function playB64(b64) {
+  if (!b64) return;
+  try {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+    stopAudio();
+    const audio = new Audio(url);
+    currentAudio = audio;
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      if (currentAudio === audio) currentAudio = null;
+    };
+    // 播不出来要让人知道，否则表现为「面试官不说话了」且毫无提示
+    audio.play().catch(() => setStatus("语音播报被浏览器拦截，点一下页面任意处即可恢复", true));
+  } catch (err) {
+    setStatus("语音播报失败：" + err.message, true);
+  }
+}
+
+// 统一的请求封装：带超时，避免后端卡住时按钮被永久锁死
+async function api(path, opts = {}, timeoutMs = 180000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(path, { ...opts, signal: ctrl.signal });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || (res.status + " " + res.statusText));
+    return data;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("请求超时，后端可能卡住了");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 取模拟素材。必须查 res.ok —— fetch 对 404 不会 reject，
+// 不查的话会把 {"detail":"Not Found"} 当成音频发给后端。
+async function fetchBlob(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("素材加载失败：" + url + "（HTTP " + res.status + "）");
+  return res.blob();
 }
 
 // ---------------------------------------------------------------- 画面
 
 function showFrame(name) {
   if (!name) return;
+  cam.onerror = () => {                 // 图 404 时别只留一块黑
+    cam.hidden = true;
+    camPlaceholder.hidden = false;
+    camPlaceholder.textContent = "画面加载失败";
+  };
   cam.src = "/fixtures/frames/" + encodeURIComponent(name);
   cam.hidden = false;
   camPlaceholder.hidden = true;
@@ -317,11 +371,17 @@ async function loadFixtures() {
 }
 
 async function startInterview() {
+  // 后端 /api/start 会重置会话，已经答过就问一句，别把进度默默清掉
+  if (state.turns > 0 && !confirm("重新开始会清空当前这场面试的记录，确定吗？")) return;
+
   setBusy(true, "正在开始…");
   try {
     const data = await api("/api/start", { method: "POST" });
-    started = true;
+    state.started = true;
+    state.finished = false;
+    state.turns = 0;
     log.innerHTML = "";
+    stopAudio();
     addTurn("q", "面试官", data.question);
     playB64(data.audio);
     $("report").style.display = "none";
@@ -330,7 +390,6 @@ async function startInterview() {
     setStatus("开始失败：" + err.message, true);
   } finally {
     setBusy(false);
-    startBtn.disabled = started;
   }
 }
 
@@ -343,8 +402,8 @@ async function sendAnswer() {
   try {
     // 取模拟素材 —— 真实模式下这里换成 MediaRecorder 录出来的 Blob
     const [audioBlob, frameBlob] = await Promise.all([
-      fetch("/fixtures/audio/" + encodeURIComponent(audioName)).then((r) => r.blob()),
-      fetch("/fixtures/frames/" + encodeURIComponent(frameName)).then((r) => r.blob()),
+      fetchBlob("/fixtures/audio/" + encodeURIComponent(audioName)),
+      fetchBlob("/fixtures/frames/" + encodeURIComponent(frameName)),
     ]);
 
     const form = new FormData();
@@ -352,6 +411,7 @@ async function sendAnswer() {
     form.append("frames", frameBlob, frameName);
 
     const data = await api("/api/turn", { method: "POST", body: form });
+    state.turns += 1;
 
     const tags = [];
     tags.push(["得分 " + (data.score ?? "—"), ""]);
@@ -366,17 +426,16 @@ async function sendAnswer() {
     playB64(data.audio);
 
     if (data.finished) {
+      state.finished = true;
       setStatus("面试已结束，可以查看报告了。");
-      sendBtn.disabled = true;
-      reportBtn.disabled = false;
     } else {
       setStatus("已处理完这一轮，可以继续发送。");
     }
   } catch (err) {
     setStatus("处理失败：" + err.message, true);
   } finally {
+    // 禁用状态一律交给 refreshButtons() 派生，这里只负责收尾
     setBusy(false);
-    sendBtn.disabled = !started;
   }
 }
 
@@ -433,7 +492,38 @@ reportBtn.addEventListener("click", showReport);
   document.querySelector("main").appendChild(panel);
 })();
 
-loadFixtures().catch((e) => setStatus("加载模拟素材失败：" + e.message, true));
+// 刷新页面后前端状态会丢，但后端会话还在。问一下后端，
+// 免得用户以为没开始就点「开始面试」，把进行中的面试默默清掉。
+async function restoreSession() {
+  try {
+    const s = await api("/api/status", {}, 10000);
+    if (s.turns > 0) {
+      state.started = true;
+      state.turns = s.turns;
+      state.finished = s.finished;
+      setStatus(
+        "检测到进行中的面试（已答 " + s.turns + " 轮）。界面对话记录无法恢复，" +
+        "可直接「查看报告」；重新开始会清空它。"
+      );
+    }
+  } catch (err) {
+    /* 后端没起来也不该阻塞页面 */
+  }
+}
+
+async function init() {
+  refreshButtons();               // 先按初始状态把按钮摆正
+  try {
+    await loadFixtures();
+  } catch (err) {
+    setStatus("加载模拟素材失败：" + err.message, true);
+    return;
+  }
+  await restoreSession();
+  refreshButtons();
+}
+
+init();
 </script>
 </body>
 </html>

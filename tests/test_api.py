@@ -173,6 +173,20 @@ def test_跑满轮数后自动结束(client, monkeypatch):
     assert client.get("/api/status").json()["finished"] is True
 
 
+def test_结束后不能再提交(client, monkeypatch):
+    """前端会禁用按钮，但不能只靠前端 —— 直接调 API 也得挡住，
+    否则会在已结束的面试上继续记分，报告轮数超出上限。"""
+    monkeypatch.setattr(interview.config, "MAX_TURNS", 1)
+    client.post("/api/start")
+    assert _answer(client).json()["finished"] is True
+
+    res = _answer(client)
+    assert res.status_code == 409
+    assert "结束" in res.json()["detail"]
+    # 记录没有被继续追加
+    assert client.get("/api/status").json()["turns"] == 1
+
+
 # ---------------------------------------------------------------- 报告
 
 def test_没有记录时不给报告(client):

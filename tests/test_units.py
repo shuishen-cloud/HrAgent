@@ -112,6 +112,67 @@ def test_parse_reply_空字符串也不崩():
     assert got["_parsed"] is False
 
 
+# ---------------------------------------------------------------- 类型纠错
+# 这一组是回归测试。模型偶尔会把布尔/数字写成字符串，
+# 直接用 bool() 会把 "false" 读成 True —— 在招聘场景里就是
+# 「没作弊」被判成「作弊」，是最不能出错的方向。
+
+def test_字符串_false_不能被当成_true():
+    got = llm.parse_reply('{"cheating_suspected": "false", "next_question": "x"}')
+    assert got["cheating_suspected"] is False
+
+
+def test_字符串_true_能识别():
+    assert llm.parse_reply('{"cheating_suspected": "true"}')["cheating_suspected"] is True
+
+
+def test_should_end_字符串_false_不会提前结束面试():
+    assert llm.parse_reply('{"should_end": "false"}')["should_end"] is False
+
+
+def test_走神字段字符串_false_不会被算成走神():
+    got = llm.parse_reply('{"attention": {"focused": "false"}, "next_question": "x"}')
+    assert got["attention"]["focused"] is False
+
+
+def test_认不出的布尔值走安全默认():
+    """认不出来时宁可漏报，也不能误伤候选人。"""
+    got = llm.parse_reply('{"cheating_suspected": "说不清", "attention": {"focused": "?"}}')
+    assert got["cheating_suspected"] is False   # 不说人作弊
+    assert got["attention"]["focused"] is True  # 不说人走神
+
+
+def test_布尔值写法汇总():
+    for v in (False, "false", "False", "no", 0, "否", "无", None):
+        assert llm.parse_reply(json.dumps({"cheating_suspected": v}))["cheating_suspected"] is False, v
+    for v in (True, "true", "True", "yes", 1, "是"):
+        assert llm.parse_reply(json.dumps({"cheating_suspected": v}))["cheating_suspected"] is True, v
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(7, 7), ("7", 7), (7.0, 7), ("7.5", 8), ("8分", 8), ("给7分", 7), (None, None), (True, None)],
+)
+def test_分数容错(raw, expected):
+    got = llm.parse_reply(json.dumps({"evaluation": {"score": raw}}))
+    assert got["evaluation"]["score"] == expected
+
+
+def test_attention_是字符串时不崩溃():
+    """曾经这里会抛 AttributeError，整轮面试直接 502。"""
+    got = llm.parse_reply('{"attention": "候选人正对镜头", "next_question": "x"}')
+    assert got["attention"]["focused"] is True
+    assert got["attention"]["note"] == "候选人正对镜头"   # 内容不丢
+
+
+@pytest.mark.parametrize("bad", [123, None, ["a"], 3.14])
+def test_字段类型完全不对也不抛异常(bad):
+    got = llm.parse_reply(json.dumps({"attention": bad, "evaluation": bad, "next_question": "x"}))
+    assert got["_parsed"] is True
+    assert isinstance(got["attention"]["focused"], bool)
+    assert got["next_question"]
+
+
 # ---------------------------------------------------------------- llm: 调用
 
 class _FakeCompletions:

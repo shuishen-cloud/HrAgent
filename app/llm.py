@@ -118,29 +118,80 @@ def _extract_json(raw: str) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
-def _normalize(obj: dict) -> dict:
-    """补齐缺失字段、纠正类型，保证下游拿到稳定的结构。"""
-    evaluation = obj.get("evaluation") or {}
-    attention = obj.get("attention") or {}
+_TRUE_WORDS = {"true", "yes", "y", "1", "是", "真", "有", "对"}
+_FALSE_WORDS = {"false", "no", "n", "0", "否", "假", "无", "不", ""}
 
-    score = evaluation.get("score")
-    if isinstance(score, str) and score.strip().isdigit():
-        score = int(score)
-    if not isinstance(score, int):
-        score = None
+
+def _as_bool(value, default: bool) -> bool:
+    """把 LLM 可能给出的各种写法转成 bool。
+
+    **不能直接用 bool()**：字符串 "false" 是非空字符串，bool("false") 是 True。
+    模型偶尔会把布尔值写成字符串，那样「没有作弊」会被读成「作弊」——
+    在招聘场景里这是最不能出错的方向。
+    认不出来时返回 default，而不是瞎猜。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in _TRUE_WORDS:
+            return True
+        if word in _FALSE_WORDS:
+            return False
+    return default
+
+
+def _as_dict_or_text(value) -> tuple[dict, str]:
+    """模型有时把本该是对象的字段直接写成一句话。
+
+    返回 (字典, 那句话)。这样既不会崩，也不丢掉它说的内容。
+    """
+    if isinstance(value, dict):
+        return value, ""
+    if isinstance(value, str):
+        return {}, value.strip()
+    return {}, ""
+
+
+def _as_score(value) -> int | None:
+    """分数容错：接受 7 / 7.0 / "7" / "7.5分" 等写法，认不出返回 None。"""
+    if isinstance(value, bool):          # bool 是 int 的子类，得先挡掉
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(round(value))
+    if isinstance(value, str):
+        found = re.search(r"-?\d+(?:\.\d+)?", value)
+        if found:
+            return int(round(float(found.group())))
+    return None
+
+
+def _normalize(obj: dict) -> dict:
+    """补齐缺失字段、纠正类型，保证下游拿到稳定的结构。
+
+    任何字段类型异常都不能让它抛异常 —— 这是 parse_reply 的对外承诺。
+    """
+    evaluation, evaluation_text = _as_dict_or_text(obj.get("evaluation"))
+    attention, attention_text = _as_dict_or_text(obj.get("attention"))
 
     return {
         "evaluation": {
-            "score": score,
-            "comment": str(evaluation.get("comment") or ""),
+            "score": _as_score(evaluation.get("score")),
+            "comment": str(evaluation.get("comment") or evaluation_text or ""),
         },
         "attention": {
-            "focused": bool(attention.get("focused", True)),
-            "note": str(attention.get("note") or ""),
+            # 认不出来时偏向「专注」：不轻易给候选人扣走神的帽子
+            "focused": _as_bool(attention.get("focused"), default=True),
+            "note": str(attention.get("note") or attention_text or ""),
         },
-        "cheating_suspected": bool(obj.get("cheating_suspected", False)),
+        # 同理，偏向「没作弊」：宁可漏报也不误伤
+        "cheating_suspected": _as_bool(obj.get("cheating_suspected"), default=False),
         "next_question": str(obj.get("next_question") or "").strip() or "请继续说说你的想法。",
-        "should_end": bool(obj.get("should_end", False)),
+        "should_end": _as_bool(obj.get("should_end"), default=False),
         "_parsed": True,
     }
 

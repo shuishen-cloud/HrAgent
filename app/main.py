@@ -113,9 +113,18 @@ def turn(
     """
     if not session.started:
         raise HTTPException(status_code=409, detail="面试还没开始，先调用 /api/start")
+    if session.state.finished:
+        # 前端也会禁用按钮，但不能只靠前端 —— 直接调 API 同样得挡住，
+        # 否则会在已结束的面试上继续记分，报告轮数超出上限
+        raise HTTPException(status_code=409, detail="面试已经结束，需要重新调用 /api/start")
 
+    # 显式回到开头再读：不依赖 UploadFile 内部文件指针的位置
+    audio.file.seek(0)
     audio_bytes = audio.file.read()
-    frame_bytes = [f.file.read() for f in frames]
+    frame_bytes = []
+    for f in frames:
+        f.file.seek(0)
+        frame_bytes.append(f.file.read())
 
     # run_turn 是同步且耗时的（STT + LLM），放到线程里跑，别卡住事件循环
     with session.lock:
