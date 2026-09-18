@@ -98,12 +98,19 @@ def test_parse_reply_字符串分数转成整数():
     assert got["evaluation"]["score"] == 7
 
 
-def test_parse_reply_彻底解析失败时兜底不抛异常():
-    got = llm.parse_reply("模型今天不想输出 JSON")
+def test_parse_reply_彻底解析失败时不把原文当问题():
+    """模型被 max_tokens 截断时返回的常是半截的 ```json {...}。
+
+    那样的乱码会被 TTS **念给候选人听**，还会写进报告的问题字段。
+    所以兜底要换成一句安全追问，原文另存 _raw 供排查。
+    """
+    got = llm.parse_reply("```json\n{\"evaluation\": {\"score\": 7")
     assert got["_parsed"] is False
-    # 兜底把原文当问题，面试流程不中断
-    assert got["next_question"] == "模型今天不想输出 JSON"
-    assert got["should_end"] is False
+    assert "```" not in got["next_question"]
+    assert "evaluation" not in got["next_question"]
+    assert got["next_question"]          # 是一句能念出口的话
+    assert got["should_end"] is False    # 不因为解析失败就结束面试
+    assert "_raw" in got                 # 原文没丢，供排查
 
 
 def test_parse_reply_空字符串也不崩():
@@ -405,3 +412,28 @@ def test_synthesize_空文字不调用合成(monkeypatch):
     assert tts.synthesize("") == b""
     assert tts.synthesize("   ") == b""
     assert "text" not in recorder  # 压根没发起合成
+
+
+# ---------------------------------------------------------------- 分数与布尔边界
+
+@pytest.mark.parametrize("raw,expected", [(85, 10), (-3, 0), (100, 10), (0, 0), (10, 10)])
+def test_分数夹在_0_到_10(raw, expected):
+    """报告用 8/6 两档阈值。换模型/端点后对方若按百分制给分，
+    平均分会变成 85，结论直接失真成「建议通过」。"""
+    got = llm.parse_reply(json.dumps({"evaluation": {"score": raw}}))
+    assert got["evaluation"]["score"] == expected
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_空字符串不该被当成走神(blank):
+    """空串是「没给出值」，该走 default（偏向专注）。
+    若把它当「认得出的 False」，模型输出空值时候选人就被记成走神 ——
+    正是 _as_bool 声明要避免的误伤方向。"""
+    got = llm.parse_reply(json.dumps({"attention": {"focused": blank}}))
+    assert got["attention"]["focused"] is True
+
+
+def test_明确表示否定的词仍然生效():
+    for word in ["false", "no", "否", "无", "不", "0"]:
+        got = llm.parse_reply(json.dumps({"attention": {"focused": word}}))
+        assert got["attention"]["focused"] is False, word

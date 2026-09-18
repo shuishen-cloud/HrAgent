@@ -68,6 +68,8 @@ HF_ENDPOINT = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
 
 # ---- 语音合成 TTS（说）----
 TTS_VOICE = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
+# 合成超时。没有它的话，edge-tts 挂起会让持锁的整轮请求永不返回
+TTS_TIMEOUT = float(os.getenv("TTS_TIMEOUT", "30"))
 
 # ---- 面试流程 ----
 MAX_TURNS = int(os.getenv("MAX_TURNS", "5"))          # 最多几轮问答

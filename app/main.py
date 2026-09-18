@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import threading
 from typing import Annotated
 
@@ -19,6 +20,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, interview
+
+logger = logging.getLogger("hragent")
 
 app = FastAPI(title="HrAgent 多模态面试官")
 
@@ -46,6 +49,17 @@ session = Session()
 
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
+
+
+def _fail(exc: Exception, what: str) -> HTTPException:
+    """把内部异常转成可读的 HTTP 错误。
+
+    只回异常**类型**，不回原始消息 —— 上游报错体里可能带请求头、
+    内网地址等内容（自建 base_url 的网关尤其常见），不该原样送到浏览器。
+    完整信息写服务端日志，排查照样有据可查。
+    """
+    logger.exception("%s失败", what)
+    return HTTPException(status_code=502, detail=f"{what}失败：{exc.__class__.__name__}")
 
 
 # ---------------------------------------------------------------- 页面
@@ -90,11 +104,19 @@ def status() -> dict:
 
 @app.post("/api/start")
 def start() -> dict:
-    """开始面试：重置会话，返回开场问题及其语音。"""
+    """开始面试：重置会话，返回开场问题及其语音。
+
+    这里也要兜异常：开场语音合成失败（首次跑、被墙、edge-tts 限流）时，
+    不兜就是裸 500 + 非 JSON 响应，前端只能显示 "500 Internal Server Error"，
+    用户完全看不出是 TTS 的问题。
+    """
     session.reset()
-    with session.lock:
-        question, audio = interview.start(session.state)
-        session.started = True
+    try:
+        with session.lock:
+            question, audio = interview.start(session.state)
+            session.started = True
+    except Exception as exc:
+        raise _fail(exc, "开始面试") from exc
     return {"question": question, "audio": _b64(audio)}
 
 
@@ -126,14 +148,12 @@ def turn(
         f.file.seek(0)
         frame_bytes.append(f.file.read())
 
-    # run_turn 是同步且耗时的（STT + LLM），放到线程里跑，别卡住事件循环
+    # run_turn 是同步且耗时的（STT + LLM + TTS），放到线程里跑，别卡住事件循环
     with session.lock:
         try:
             result = interview.run_turn(session.state, audio_bytes, frame_bytes)
-        except Exception as exc:  # 让前端拿到可读的错误，而不是 500 堆栈
-            raise HTTPException(
-                status_code=502, detail=f"处理失败：{exc.__class__.__name__}: {exc}"
-            ) from exc
+        except Exception as exc:
+            raise _fail(exc, "处理") from exc
 
     return {
         "answer": result.answer,
@@ -145,6 +165,9 @@ def turn(
         "question": result.question,
         "audio": _b64(result.audio),
         "finished": result.finished,
+        # 本轮 LLM 是否按格式返回。False = 走了兜底（问题可能不是真问题），
+        # 前端据此给个提示，别让人以为模型正常答了
+        "parsed": result.parsed,
     }
 
 

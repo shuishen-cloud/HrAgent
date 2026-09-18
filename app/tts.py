@@ -21,10 +21,26 @@ async def _stream_audio(text: str, voice: str) -> bytes:
 
 
 def synthesize(text: str, voice: str | None = None) -> bytes:
-    """把文字合成为 MP3 音频字节。文字为空则返回空字节。"""
+    """把文字合成为 MP3 音频字节。文字为空则返回空字节。
+
+    **必须带超时**：edge-tts 连上服务端后不再回数据（限流/网络抖动）时，
+    `asyncio.run` 会永不返回。而调用方是在持有全局锁的情况下调它的，
+    一次挂起就会让整个服务（含 /api/status）永久无响应，且没有任何报错。
+    """
     if not text or not text.strip():
         return b""
 
     import asyncio
 
-    return asyncio.run(_stream_audio(text, voice or config.TTS_VOICE))
+    async def _run() -> bytes:
+        return await asyncio.wait_for(
+            _stream_audio(text, voice or config.TTS_VOICE),
+            timeout=config.TTS_TIMEOUT,
+        )
+
+    try:
+        return asyncio.run(_run())
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(
+            f"语音合成超时（{config.TTS_TIMEOUT:.0f} 秒无响应）"
+        ) from exc

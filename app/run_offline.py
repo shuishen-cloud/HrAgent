@@ -89,14 +89,16 @@ def main() -> int:
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     audio_dir = config.REPORTS_DIR / "audio" / stamp
-    if not args.no_tts:
+    if args.no_tts:
+        # 真正把合成换掉，而不是「合成完再丢掉」。否则 --no-tts 依然会去联网调
+        # edge-tts，离线时照样在第一步就中断 —— 而它本意正是「不依赖网络、快一点」。
+        tts.synthesize = lambda text, voice=None: b""
+    else:
         audio_dir.mkdir(parents=True, exist_ok=True)
 
     state = interview.InterviewState()
     question, audio = interview.start(state)
-    if args.no_tts:
-        audio = b""
-    else:
+    if audio:
         (audio_dir / "00_opening.mp3").write_bytes(audio)
 
     print(f"面试官：{question}\n")

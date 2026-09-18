@@ -251,3 +251,102 @@ def test_作弊时结论要求人工复核():
 )
 def test_结论分档(avg, expected):
     assert expected in interview._recommend(avg, [], [])
+
+
+# ---------------------------------------------------------------- 失败时的状态完整性
+# TTS 要联网，是整轮里最容易失败的一步。它失败时状态必须保持原样，
+# 否则这一轮已经记进 records，用户重试会变成两轮，而且报告里那轮的
+# 「问题」是从没被念出来过的那句，问与答对不上。
+
+def test_tts_失败时这一轮不会被记进_state(monkeypatch, pipeline):
+    state = interview.InterviewState()
+    interview.start(state)
+    history_before = list(state.history)
+
+    def boom(text, voice=None):
+        raise RuntimeError("edge-tts 挂了")
+
+    monkeypatch.setattr(tts, "synthesize", boom)
+    with pytest.raises(RuntimeError):
+        interview.run_turn(state, b"audio", [_frame("focused_01.jpg")])
+
+    assert state.records == []                  # 没记
+    assert state.history == history_before      # 历史没推进
+    assert state.finished is False
+    assert len(state.records) == 0
+
+
+def test_llm_失败时也不会留下半轮记录(monkeypatch, pipeline):
+    state = interview.InterviewState()
+    interview.start(state)
+
+    def boom(history, answer, frames, system=None):
+        raise RuntimeError("LLM 超时")
+
+    monkeypatch.setattr(llm, "chat", boom)
+    with pytest.raises(RuntimeError):
+        interview.run_turn(state, b"audio", [])
+
+    assert state.records == []
+    assert len(state.history) == 1     # 只剩开场那句
+
+
+def test_tts_失败后重试仍算同一轮(monkeypatch, pipeline):
+    """失败一次、成功一次之后，应该只有 1 条记录，不是 2 条。"""
+    state = interview.InterviewState()
+    interview.start(state)
+
+    calls = {"n": 0}
+    real = tts.synthesize
+
+    def flaky(text, voice=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("第一次失败")
+        return b"MP3"
+
+    monkeypatch.setattr(tts, "synthesize", flaky)
+    with pytest.raises(RuntimeError):
+        interview.run_turn(state, b"audio", [_frame("focused_01.jpg")])
+    result = interview.run_turn(state, b"audio", [_frame("focused_01.jpg")])
+
+    assert len(state.records) == 1
+    assert result.question          # 正常返回
+
+
+# ---------------------------------------------------------------- 题库容错
+
+def test_题库顶层是数组时走兜底(monkeypatch, tmp_path):
+    """json.loads('["a","b"]') 是合法的，光 catch 异常挡不住，
+    后面 bank.get() 会 AttributeError → 面试完全开不了场。"""
+    (tmp_path / "questions.json").write_text('["请自我介绍", "讲讲项目"]', encoding="utf-8")
+    monkeypatch.setattr(interview.config, "DATA_DIR", tmp_path)
+
+    bank = interview.load_questions()
+    assert isinstance(bank, dict)
+    assert bank["opening"]
+
+
+@pytest.mark.parametrize("content", ['["a"]', "null", "123", '"字符串"', "{}", "不是一个json"])
+def test_题库内容异常都能开局(monkeypatch, tmp_path, content):
+    (tmp_path / "questions.json").write_text(content, encoding="utf-8")
+    monkeypatch.setattr(interview.config, "DATA_DIR", tmp_path)
+
+    question, audio = interview.start(interview.InterviewState())
+    assert question.strip()      # 有开场白
+    assert audio                 # 有语音
+
+
+def test_题库缺_closing_时结束语不为空(monkeypatch, tmp_path):
+    """缺 closing 时用空串 → 合成为空音频 → 候选人在静音中结束面试，
+    界面上还看不出异常。"""
+    (tmp_path / "questions.json").write_text('{"opening": "开场白"}', encoding="utf-8")
+    monkeypatch.setattr(interview.config, "DATA_DIR", tmp_path)
+
+    state = interview.InterviewState(max_turns=1)
+    interview.start(state)
+    result = interview.run_turn(state, b"audio", [_frame("focused_01.jpg")])
+
+    assert result.finished is True
+    assert result.question.strip()          # 不是空串
+    assert result.audio                     # 不是空音频

@@ -98,6 +98,18 @@ def main() -> int:
         print(f"\n有 {failures} 个用例调用失败。")
         return 1
 
+    if not rows:
+        # 一个用例都没跑成却打印「✅ 全部符合期望」= 零证据下的虚假信心。
+        # 典型场景：按本文件建议换成真实照片，但文件名与 CASES 对不上，
+        # 于是 5 个用例全被跳过，脚本却依然报成功。
+        print(
+            "\n❌ 没有任何用例被执行（画面帧文件名与 CASES 不符？）。\n"
+            f"   请确认 {frames_dir} 下有："
+            + "、".join(c.frame for c in CASES),
+            file=sys.stderr,
+        )
+        return 2
+
     # ---- 汇总 ----
     print(f"\n{'=' * 62}\n汇总\n{'=' * 62}")
     print(f"{'画面':<18}{'期望':<16}{'专注':<8}{'疑似作弊':<10}")

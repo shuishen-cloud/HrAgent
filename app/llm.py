@@ -79,16 +79,24 @@ def build_messages(
     return messages
 
 
+_SAFE_QUESTION = "抱歉，我没太听清。能就刚才的问题再展开说说吗？"
+
+
 def _fallback_reply(raw: str) -> dict:
-    """LLM 没按格式返回时的兜底：把原文当成下一个问题，保证面试不中断。"""
-    text = (raw or "").strip()
+    """LLM 没按格式返回时的兜底，保证面试不中断。
+
+    **不要把原文当成下一个问题。** 模型被 max_tokens 截断时，返回的往往是
+    半截的 ```json {...} —— 那样这段乱码会被 TTS 念给候选人听，还会写进报告。
+    改成一句安全的追问，原文另存到 _raw 供排查。
+    """
     return {
         "evaluation": {"score": None, "comment": "（本轮未获得结构化点评）"},
         "attention": {"focused": True, "note": ""},
         "cheating_suspected": False,
-        "next_question": text or "请继续说说你的想法。",
+        "next_question": _SAFE_QUESTION,
         "should_end": False,
         "_parsed": False,
+        "_raw": (raw or "")[:500],
     }
 
 
@@ -119,7 +127,10 @@ def _extract_json(raw: str) -> dict | None:
 
 
 _TRUE_WORDS = {"true", "yes", "y", "1", "是", "真", "有", "对"}
-_FALSE_WORDS = {"false", "no", "n", "0", "否", "假", "无", "不", ""}
+# 注意：这里**不能**包含空串。空串属于「没给出值」，应该走 default，
+# 而不是被当成「认得出的 False」—— 否则模型对 focused 输出 "" 时
+# 会被记成走神，正好违反 _as_bool 声明的「不轻易给候选人扣帽子」。
+_FALSE_WORDS = {"false", "no", "n", "0", "否", "假", "无", "不"}
 
 
 def _as_bool(value, default: bool) -> bool:
@@ -156,18 +167,25 @@ def _as_dict_or_text(value) -> tuple[dict, str]:
 
 
 def _as_score(value) -> int | None:
-    """分数容错：接受 7 / 7.0 / "7" / "7.5分" 等写法，认不出返回 None。"""
+    """分数容错：接受 7 / 7.0 / "7" / "7.5分" 等写法，认不出返回 None。
+
+    结果**夹在 0-10**：报告用的是 8/6 两档阈值，若换了模型或端点后对方按
+    百分制给分（85），平均分会变成 85，结论直接失真成「建议通过」。
+    """
     if isinstance(value, bool):          # bool 是 int 的子类，得先挡掉
         return None
     if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(round(value))
-    if isinstance(value, str):
+        number = value
+    elif isinstance(value, float):
+        number = int(round(value))
+    elif isinstance(value, str):
         found = re.search(r"-?\d+(?:\.\d+)?", value)
-        if found:
-            return int(round(float(found.group())))
-    return None
+        if not found:
+            return None
+        number = int(round(float(found.group())))
+    else:
+        return None
+    return max(0, min(10, number))
 
 
 def _normalize(obj: dict) -> dict:

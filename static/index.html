@@ -421,6 +421,11 @@ async function sendAnswer() {
     const box = addTurn("a", "候选人（语音转写）", data.answer || "（未识别到语音）", tags);
     if (data.comment) box.appendChild(el("div", "note", "点评：" + data.comment));
     if (data.attention_note) box.appendChild(el("div", "note", "画面：" + data.attention_note));
+    // parsed=false 表示模型没按约定格式返回，本轮走的是兜底问题。
+    // 不说的话，用户会以为那句「能再展开说说吗」是模型真问的。
+    if (data.parsed === false) {
+      box.appendChild(el("div", "note", "⚠️ 本轮模型输出异常，已改用兜底追问"));
+    }
 
     addTurn("q", "面试官", data.question);
     playB64(data.audio);

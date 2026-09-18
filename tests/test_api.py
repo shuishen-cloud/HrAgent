@@ -155,13 +155,32 @@ def test_引擎报错时返回可读信息而不是500堆栈(client, monkeypatch
     client.post("/api/start")
 
     def boom(state, audio_bytes=b"", frames=None):
-        raise RuntimeError("模型超时")
+        raise RuntimeError("模型超时；内网地址 10.0.0.7，Authorization: Bearer sk-xxx")
 
     monkeypatch.setattr(interview, "run_turn", boom)
     res = _answer(client)
 
     assert res.status_code == 502
-    assert "模型超时" in res.json()["detail"]
+    detail = res.json()["detail"]
+    assert "RuntimeError" in detail          # 回异常类型，方便定位
+    # 但原始消息不能回给浏览器：上游报错体常带请求头、内网地址等
+    assert "10.0.0.7" not in detail
+    assert "sk-xxx" not in detail
+    assert "Authorization" not in detail
+
+
+def test_开始接口出错也返回可读信息(client, monkeypatch):
+    """开场语音合成失败时不能是裸 500 —— 前端只能显示 "500 Internal Server Error"，
+    用户根本看不出是 TTS 的问题。"""
+    def boom(state):
+        raise RuntimeError("edge-tts 连接被重置")
+
+    monkeypatch.setattr(interview, "start", boom)
+    res = client.post("/api/start")
+
+    assert res.status_code == 502
+    assert "RuntimeError" in res.json()["detail"]
+    assert client.get("/api/status").json()["started"] is False
 
 
 def test_跑满轮数后自动结束(client, monkeypatch):
