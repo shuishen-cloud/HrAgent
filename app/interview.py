@@ -175,6 +175,8 @@ def build_report(state: InterviewState) -> dict:
     distracted = [r.index for r in records if not r.focused]
     cheating = [r.index for r in records if r.cheating]
 
+    verdict, recommendation = _recommend(avg, cheating)
+
     return {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "turns": len(records),
@@ -182,7 +184,9 @@ def build_report(state: InterviewState) -> dict:
         "scores": [r.score for r in records],
         "distracted_turns": distracted,
         "cheating_turns": cheating,
-        "recommendation": _recommend(avg, cheating, records),
+        # verdict 是给前端着色的枚举，避免前端拿中文串做关键词匹配
+        "verdict": verdict,
+        "recommendation": recommendation,
         "records": [
             {
                 "index": r.index,
@@ -200,28 +204,37 @@ def build_report(state: InterviewState) -> dict:
     }
 
 
-def _recommend(avg: float | None, cheating: list[int], records: list[TurnRecord]) -> str:
-    """给一个粗略的结论。**这是规则算出来的，不是 LLM 的判断**，只作参考。"""
+def _recommend(avg: float | None, cheating: list[int]) -> tuple[str, str]:
+    """给一个粗略的结论，返回 (verdict 枚举, 中文结论)。
+
+    **这是规则算出来的，不是 LLM 的判断**，只作参考。
+    verdict 供前端着色：review / fail / hold / pass / unknown
+    """
     if cheating:
-        return f"建议复核：第 {'、'.join(map(str, cheating))} 轮画面出现疑似作弊，需人工确认"
+        turns = "、".join(map(str, cheating))
+        return "review", f"建议复核：第 {turns} 轮画面出现疑似作弊，需人工确认"
     if avg is None:
-        return "无法评估：本轮没有拿到有效评分"
+        return "unknown", "无法评估：本轮没有拿到有效评分"
     if avg >= 8:
-        return "建议通过：回答质量整体较好"
+        return "pass", "建议通过：回答质量整体较好"
     if avg >= 6:
-        return "待定：回答基本合格，建议结合岗位要求人工复核"
-    return "建议不通过：回答质量偏低"
+        return "hold", "待定：回答基本合格，建议结合岗位要求人工复核"
+    return "fail", "建议不通过：回答质量偏低"
 
 
 def render_markdown(state: InterviewState, report: dict | None = None, summary: str = "") -> str:
-    """把报告渲染成可读的 Markdown。"""
+    """把报告渲染成可读的 Markdown。
+
+    **故意保持简短**：逐轮只留一行（得分 + 一句点评 + 异常标记），
+    不展开问题与回答全文 —— 那些在 build_report 的 records 里都有，
+    要看详情去查结构化数据，不要在报告里堆成一大篇。
+    """
     report = report or build_report(state)
+    done = report["average_score"]
     lines = [
         "# 面试报告",
         "",
-        f"- 生成时间：{report['generated_at']}",
-        f"- 问答轮数：{report['turns']}",
-        f"- 平均得分：{report['average_score'] if report['average_score'] is not None else '—'}",
+        f"- 平均得分：{done if done is not None else '—'}",
         f"- 走神轮次：{report['distracted_turns'] or '无'}",
         f"- 疑似作弊：{report['cheating_turns'] or '无'}",
         f"- **结论**：{report['recommendation']}",
@@ -233,16 +246,13 @@ def render_markdown(state: InterviewState, report: dict | None = None, summary: 
 
     lines += ["## 逐轮明细", ""]
     for r in report["records"]:
-        lines += [
-            f"### 第 {r['index']} 轮　得分 {r['score'] if r['score'] is not None else '—'}",
-            "",
-            f"- **问题**：{r['question']}",
-            f"- **回答**：{r['answer'] or '（未识别到语音）'}",
-            f"- **点评**：{r['comment']}",
-            f"- **画面**：{'专注' if r['focused'] else '⚠️ 走神'}　{r['attention_note']}",
-        ]
+        score = r["score"] if r["score"] is not None else "—"
+        parts = [f"第 {r['index']} 轮", f"{score} 分"]
+        if r["comment"]:
+            parts.append(r["comment"].strip())
+        parts.append("专注" if r["focused"] else "⚠️ 走神")
         if r["cheating"]:
-            lines.append("- **⚠️ 疑似作弊**：画面中出现多人或异常情况")
-        lines += [f"- 本轮采集帧数：{r['frames']}", ""]
+            parts.append("⚠️ 疑似作弊")
+        lines.append("- " + " · ".join(parts))
 
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"

@@ -217,6 +217,32 @@ def test_报告_markdown_可渲染(pipeline):
     assert "逐轮明细" in md
 
 
+def test_报告逐轮只留一行_不堆问答全文(pipeline):
+    """报告要简短：逐轮一行（得分 + 点评 + 异常），
+    不展开问题与回答全文 —— 那些在 build_report 的结构化 records 里。"""
+    state = _full_interview(None)
+    report = interview.build_report(state)
+    md = interview.render_markdown(state, report)
+
+    # 每轮的「问题」和「回答」原文都不该出现在报告里
+    for r in report["records"]:
+        assert r["question"] not in md
+        assert r["answer"] not in md
+        assert r["attention_note"] not in md
+
+    detail = md.split("## 逐轮明细", 1)[1]
+    bullets = [ln for ln in detail.splitlines() if ln.startswith("- ")]
+    assert len(bullets) == 3               # 3 轮 → 3 行
+    for b in bullets:
+        assert b.count("·") >= 2           # 轮次 · 得分 · 点评…
+        assert len(b) < 160                # 一行，不展开
+
+
+def test_报告含_verdict_枚举(pipeline):
+    state = _full_interview(None)
+    assert interview.build_report(state)["verdict"] == "review"   # 第3轮作弊
+
+
 def test_报告在无有效评分时不崩():
     state = interview.InterviewState(max_turns=1)
     interview.start(state)
@@ -246,11 +272,27 @@ def test_作弊时结论要求人工复核():
 
 
 @pytest.mark.parametrize(
-    "avg,expected",
-    [(9.0, "建议通过"), (7.0, "待定"), (4.0, "建议不通过")],
+    "avg,expected_verdict,expected_text",
+    [
+        (9.0, "pass", "建议通过"),
+        (8.0, "pass", "建议通过"),
+        (7.0, "hold", "待定"),
+        (6.0, "hold", "待定"),
+        (4.0, "fail", "建议不通过"),
+        (None, "unknown", "无法评估"),
+    ],
 )
-def test_结论分档(avg, expected):
-    assert expected in interview._recommend(avg, [], [])
+def test_结论分档(avg, expected_verdict, expected_text):
+    verdict, text = interview._recommend(avg, [])
+    assert verdict == expected_verdict
+    assert expected_text in text
+
+
+def test_疑似作弊时结论要求人工复核():
+    verdict, text = interview._recommend(9.0, [3])
+    assert verdict == "review"          # 分数再高也要复核，优先于分数档
+    assert "复核" in text
+    assert "3" in text
 
 
 # ---------------------------------------------------------------- 失败时的状态完整性
