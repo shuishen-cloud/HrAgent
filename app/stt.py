@@ -13,7 +13,7 @@ from . import config
 _model = None
 
 
-def _build_model():
+def _build_model(local_files_only: bool):
     from faster_whisper import WhisperModel
 
     return WhisperModel(
@@ -21,48 +21,44 @@ def _build_model():
         device=config.STT_DEVICE,
         compute_type=config.STT_COMPUTE_TYPE,
         cpu_threads=config.STT_CPU_THREADS,
+        local_files_only=local_files_only,
     )
 
 
 def _get_model():
     """懒加载并缓存 Whisper 模型（接缝：单测里打桩这个函数即可）。
 
-    加载策略：**先试离线**。
-    huggingface_hub 即使模型已缓存，仍会联网检查有没有新版本；国内连不上
-    huggingface.co，而且那是「挂起」不是「快速失败」，进程会一直卡住不动
-    （实测：跑到第一轮 STT 就停住，不报错也不退出）。走离线模式直接用本地缓存，
-    秒开且不碰网络。
+    加载策略：**先试纯本地，本地没缓存才联网走镜像**。
 
-    本地确实没有缓存时才回退到联网下载，并指向镜像站。
+    这两个坑根子是同一件事：**huggingface_hub 在首次 import 时就把
+    HF_HUB_OFFLINE / HF_ENDPOINT / HF_HUB_DISABLE_XET 读成模块常量**
+    （constants.py），之后再改 os.environ 一律不生效。
+
+    1. **不能用 HF_HUB_OFFLINE 表达「先离线」。** 只要 `from faster_whisper
+       import` 之前它已经存在，常量就被锁成 True —— 之后再把环境变量删掉也
+       回不去，回退联网必然以 OfflineModeIsEnabled 告终。于是「先离线」实际
+       变成了「永远离线」，**新机器永远下不了模型**。所以离线改用
+       `local_files_only` 参数（faster-whisper 原生支持，正是为这个场景设计的）。
+    2. **镜像地址必须在 import 之前设好**，否则不生效，会直连 huggingface.co ——
+       国内那是「丢包挂起」不是「快速失败」，进程会一直卡住不动，比报错更难查。
     """
     global _model
     if _model is not None:
         return _model
 
-    # 环境变量只在这段加载期间生效，出来就还原，避免污染进程里的其他 HF 调用
-    prev_offline = os.environ.get("HF_HUB_OFFLINE")
-    prev_endpoint = os.environ.get("HF_ENDPOINT")
+    # 必须赶在 `from faster_whisper import ...` 之前，理由见上面第 2 条。
+    # 用 setdefault：用户显式设过就尊重用户的值。
+    os.environ.setdefault("HF_ENDPOINT", config.HF_ENDPOINT)
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")  # xet 存储后端在国内也不通
+
     try:
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        try:
-            _model = _build_model()
-        except Exception:
-            # 离线加载失败 = 本地确实没缓存，这时才联网，并指向镜像站
-            os.environ.pop("HF_HUB_OFFLINE", None)
-            os.environ.setdefault("HF_ENDPOINT", config.HF_ENDPOINT)
-            _model = _build_model()
-    finally:
-        _restore_env("HF_HUB_OFFLINE", prev_offline)
-        _restore_env("HF_ENDPOINT", prev_endpoint)
+        # 纯本地读缓存：秒开、不碰网络（huggingface_hub 即使已缓存也会联网查更新）
+        _model = _build_model(local_files_only=True)
+    except Exception:
+        # 本地确实没缓存，这时才联网；上面设的镜像地址此时已生效
+        _model = _build_model(local_files_only=False)
 
     return _model
-
-
-def _restore_env(key: str, value: str | None) -> None:
-    if value is None:
-        os.environ.pop(key, None)
-    else:
-        os.environ[key] = value
 
 
 # Whisper 偶尔吐出半角/异体标点，统一成中文全角，避免下游看着别扭

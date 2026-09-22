@@ -335,63 +335,84 @@ def test_transcribe_结果已归一化(monkeypatch):
     assert stt.transcribe(b"x") == "你好，我是张三"
 
 
-def test_加载模型优先走离线模式(monkeypatch):
-    """已缓存时必须走离线，否则会卡在联网检查上（实测会无限挂起）。"""
+def test_加载模型优先走本地缓存(monkeypatch):
+    """已缓存时必须纯本地加载，否则会卡在联网检查上（实测会无限挂起）。"""
     seen = {}
 
-    def fake_build():
-        seen["offline"] = os.environ.get("HF_HUB_OFFLINE")
+    def fake_build(local_files_only):
+        seen["local_files_only"] = local_files_only
         return "MODEL"
 
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     monkeypatch.setattr(stt, "_build_model", fake_build)
     monkeypatch.setattr(stt, "_model", None)
 
     assert stt._get_model() == "MODEL"
-    assert seen["offline"] == "1"
+    assert seen["local_files_only"] is True
 
 
 def test_本地无缓存时回退到联网下载(monkeypatch):
-    """离线加载失败 = 本地没缓存，此时才该联网，并指向镜像站。"""
-    seen = {}
+    """本地加载失败 = 没缓存，此时才该联网（local_files_only=False）。
+
+    这条同时锁住那个 bug：**不能用 HF_HUB_OFFLINE 表达「先离线」**。
+    huggingface_hub 在 import 时把该常量读死，之后删环境变量也回退不了，
+    于是「先离线」变成「永远离线」—— 回退这一步照样被挡，新机器永远下不了模型。
+    所以断言「全程不碰这个变量」。
+    """
     calls = []
 
-    def fake_build():
-        calls.append(os.environ.get("HF_HUB_OFFLINE"))
-        if len(calls) == 1:
+    def fake_build(local_files_only):
+        calls.append(local_files_only)
+        if local_files_only:                     # 第一次：纯本地，没缓存
             raise RuntimeError("not found in cache")
-        seen["endpoint"] = os.environ.get("HF_ENDPOINT")
         return "DOWNLOADED"
 
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-    monkeypatch.delenv("HF_ENDPOINT", raising=False)
     monkeypatch.setattr(stt, "_build_model", fake_build)
     monkeypatch.setattr(stt, "_model", None)
 
     assert stt._get_model() == "DOWNLOADED"
-    assert calls == ["1", None]                       # 第一次离线，第二次放开
-    assert seen["endpoint"] == stt.config.HF_ENDPOINT  # 走镜像
-    assert "HF_HUB_OFFLINE" not in os.environ          # 用完要还原
+    assert calls == [True, False]                # 先本地，再联网
+    assert "HF_HUB_OFFLINE" not in os.environ    # 全程不碰它
 
 
-def test_加载完还原环境变量(monkeypatch):
-    """离线/镜像变量只该在加载期间生效，不能污染进程里其他 HF 调用。"""
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+def test_镜像地址赶在_import_之前设好(monkeypatch):
+    """HF_ENDPOINT 必须在首次 import huggingface_hub 之前设好，否则不生效。
+
+    它是 import 时读取的常量，等 import 完再设就晚了 —— 会直连
+    huggingface.co（国内丢包挂起，进程无声卡死），而不是走镜像。
+    """
+    seen = {}
+
+    def fake_build(local_files_only):
+        seen["endpoint"] = os.environ.get("HF_ENDPOINT")
+        seen["xet"] = os.environ.get("HF_HUB_DISABLE_XET")
+        return "MODEL"
+
     monkeypatch.delenv("HF_ENDPOINT", raising=False)
-    monkeypatch.setattr(stt, "_build_model", lambda: "MODEL")
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+    monkeypatch.setattr(stt, "_build_model", fake_build)
     monkeypatch.setattr(stt, "_model", None)
 
     stt._get_model()
 
-    assert "HF_HUB_OFFLINE" not in os.environ
-    assert "HF_ENDPOINT" not in os.environ
+    assert seen["endpoint"] == stt.config.HF_ENDPOINT  # 走镜像
+    assert seen["xet"] == "1"                          # 关掉国内不通的 xet
 
 
-def test_加载失败时也还原环境变量(monkeypatch):
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+def test_用户自己设的镜像地址不被覆盖(monkeypatch):
+    monkeypatch.setenv("HF_ENDPOINT", "https://my-mirror.example")
+    monkeypatch.setattr(stt, "_build_model", lambda local_files_only: "MODEL")
+    monkeypatch.setattr(stt, "_model", None)
 
-    def always_fail():
+    stt._get_model()
+
+    assert os.environ["HF_ENDPOINT"] == "https://my-mirror.example"
+
+
+def test_两次加载都失败时异常照样抛出(monkeypatch):
+    """别把异常吞掉 —— 上层靠它报错，吞了就变成「静默没模型」。"""
+
+    def always_fail(local_files_only):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(stt, "_build_model", always_fail)
@@ -399,20 +420,6 @@ def test_加载失败时也还原环境变量(monkeypatch):
 
     with pytest.raises(RuntimeError):
         stt._get_model()
-
-    assert "HF_HUB_OFFLINE" not in os.environ
-    assert "HF_ENDPOINT" not in os.environ
-
-
-def test_用户自己设的离线变量不被覆盖(monkeypatch):
-    """用户显式设了 HF_HUB_OFFLINE，用完要还原成他的值而不是删掉。"""
-    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
-    monkeypatch.setattr(stt, "_build_model", lambda: "MODEL")
-    monkeypatch.setattr(stt, "_model", None)
-
-    stt._get_model()
-
-    assert os.environ["HF_HUB_OFFLINE"] == "0"
 
 
 def test_transcribe_模型只加载一次(monkeypatch):
