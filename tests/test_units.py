@@ -235,14 +235,17 @@ class _FakeSegment:
 
 
 class _FakeWhisperModel:
-    def __init__(self, texts, recorder: dict):
+    def __init__(self, texts, recorder: dict, duration: float = 10.0):
         self._texts = texts
         self._recorder = recorder
+        self._duration = duration
 
     def transcribe(self, audio, **kwargs):
         self._recorder["audio"] = audio
         self._recorder["kwargs"] = kwargs
-        return [_FakeSegment(t) for t in self._texts], {"language": "zh"}
+        # info.duration 是判断「音频太短」的依据，假模型也得给
+        info = types.SimpleNamespace(language="zh", duration=self._duration)
+        return [_FakeSegment(t) for t in self._texts], info
 
 
 def test_transcribe_拼接分段并去空白(monkeypatch):
@@ -261,6 +264,63 @@ def test_transcribe_空输入直接返回空串(monkeypatch):
 
     monkeypatch.setattr(stt, "_get_model", _boom)
     assert stt.transcribe(b"") == ""
+
+
+# ---------------------------------------------------------------- 幻觉防护
+# Whisper 在无效音频（极短、底噪、切在半句话上）上不会返回空，
+# 而是幻觉出固定话术 —— 最常见的是把 initial_prompt 原样吐回来。
+# 实测：0.3 秒音频 → "请用简体中文转写。"
+# 这类输出不是空串，只判断 `if not text` 拦不住，会冒充成正常回答进报告。
+
+def test_把提示词吐回来算幻觉():
+    assert stt._looks_like_hallucination("请用简体中文转写。") is True
+    assert stt._looks_like_hallucination("以下是普通话的面试对话，请用简体中文转写。") is True
+
+
+def test_常见幻听句算幻觉():
+    for phrase in ["谢谢观看", "请不吝点赞订阅", "字幕由 XXX 提供", "amara.org"]:
+        assert stt._looks_like_hallucination(phrase) is True, phrase
+
+
+def test_空串算幻觉():
+    assert stt._looks_like_hallucination("") is True
+    assert stt._looks_like_hallucination("   ") is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "我之前在一家公司做过后端开发",
+        "请用一下你说的那个技术",          # 含「请用」但整体是真话
+        "我今天订阅了一个技术专栏",        # 含「订阅」但是正常内容
+    ],
+)
+def test_正常回答不算幻觉(text):
+    assert stt._looks_like_hallucination(text) is False, text
+
+
+def test_音频太短直接返回空(monkeypatch):
+    """0.3 秒的音频不该送进结果 —— 实测会吐回提示词。"""
+    fake = _FakeWhisperModel(["请用简体中文转写。"], {}, duration=0.3)
+    monkeypatch.setattr(stt, "_get_model", lambda: fake)
+
+    assert stt.transcribe(b"short") == ""
+
+
+def test_音频够长且内容正常就正常返回(monkeypatch):
+    fake = _FakeWhisperModel(["我叫张三"], {}, duration=5.0)
+    monkeypatch.setattr(stt, "_get_model", lambda: fake)
+
+    assert stt.transcribe(b"ok") == "我叫张三"
+
+
+def test_幻觉输出被清成空_让上层走降级(monkeypatch):
+    """关键：短音频幻觉出的非空垃圾必须变成空串，
+    否则 run_turn 里「空串才降级」的判断不会触发。"""
+    fake = _FakeWhisperModel(["请用简体中文转写。"], {}, duration=8.0)
+    monkeypatch.setattr(stt, "_get_model", lambda: fake)
+
+    assert stt.transcribe(b"x") == ""
 
 
 def test_标点归一化成全角():

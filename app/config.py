@@ -56,6 +56,9 @@ STT_DEVICE = os.getenv("STT_DEVICE", "cpu")
 STT_COMPUTE_TYPE = os.getenv("STT_COMPUTE_TYPE", "int8")
 # 引导词：显著减少「输出繁体中文」的问题，也让标点更自然
 STT_INITIAL_PROMPT = os.getenv("STT_INITIAL_PROMPT", "以下是普通话的面试对话，请用简体中文转写。")
+# 短于这个秒数的录音不送进模型 —— 音频太短时 Whisper 会把 initial_prompt
+# 原样吐回来（实测 0.3 秒音频 → "请用简体中文转写。"），比空串更隐蔽
+STT_MIN_SECONDS = float(os.getenv("STT_MIN_SECONDS", "0.8"))
 # ctranslate2 在本机 CPU 上多线程会内存崩溃（corrupted double-linked list），
 # 固定单线程换稳定。机器上跑得动的话可以调大，例如 STT_CPU_THREADS=4
 STT_CPU_THREADS = int(os.getenv("STT_CPU_THREADS", "1"))
