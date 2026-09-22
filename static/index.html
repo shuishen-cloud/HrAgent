@@ -3,26 +3,90 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- 在 CSS 解析前就告诉浏览器这是深色页，避免首帧白闪 -->
+<meta name="color-scheme" content="dark">
 <title>HrAgent · 多模态 AI 面试官</title>
 <style>
   :root {
-    --bg: #f4f6fa;
-    --panel: #ffffff;
-    --line: #e4e8ef;
-    --line-soft: #eef1f6;
-    --text: #1b2130;
-    --muted: #6b7280;
-    --muted-2: #9aa3b2;
+    /* color-scheme 让原生控件（滚动条、<select> 弹层、表单）自动转深色。
+       <select> 的下拉弹层是操作系统绘制的，纯 CSS 修不了 —— 少了这行，
+       点开就是一个刺眼的白弹层，是暗色改造最常见的「漏白」。 */
+    color-scheme: dark;
+
+    /* ---- 基色与表面阶梯：hue 220 蓝灰，与 .camera 原渐变同色系。
+           暗色的「高度」靠表面亮度阶梯表达，不靠投影（阴影在深底上几乎不可见）---- */
+    --bg: #0b0f16;        /* page：body 背景 */
+    --sunken: #0e131a;    /* 下沉：禁用输入框、报告统计卡、滚动槽 */
+    --panel: #12171f;     /* 面板：.panel / .panel-chat */
+    --raised: #232b38;    /* 抬升：明细行、幽灵按钮 (1.26 vs 面板) */
+    --raised-2: #2a3341;  /* 再抬升：hover 态 (1.41 vs 面板) */
+
+    /* ---- 对话气泡 ----
+       ⚠️ 这里的步长比上面几档更大，是**量出来的**：初版气泡用 --raised 只做到
+       1.06 的对比度，肉眼完全看不出是个气泡，用户反馈「分不清谁说话」。
+       小面积（发丝线）1.06 能看见，**大面积填充不行** —— 别再用同一档走天下。 */
+    --bubble-q: #262f3d;        /* 面试官气泡：灰 (1.33) */
+    --bubble-a: #2a52ad;        /* 候选人气泡：蓝 (2.49) */
+    --bubble-a-ink: #eef2ff;    /* 蓝气泡上的字 (5.99，过 AA) */
+
+    /* ---- AI 点评卡片：浅橙色提示卡 ---- */
+    --note-bg: #3a2d13;         /* 琥珀底 (1.34) */
+    --note-line: #6d5219;
+    --note-ink: #f7d08a;        /* 琥珀字 (9.17) */
+
+    /* ---- 描边：暗色下承担浅色里 box-shadow 的职责 ---- */
+    --line: #262d38;
+    --line-soft: #1c222b;
+    --line-strong: #3a4453;
+
+    /* ---- 文字：正文不用纯白，纯白在深底上会 halation（发糊、显粗）---- */
+    --text: #e6eaf2;
+    --muted: #9aa5b8;
+    --muted-2: #7d8899;
+
+    /* ---- 强调色 ----
+       --accent 作「实心填充」时白字对比度是 4.50:1，正好压线过 AA，
+       这就是它能达到的最亮值 —— 任何更亮的候选都会掉到 4.5 以下，
+       所以 hover 不能用「填充变亮」，得改用光晕（见 button:hover）。
+       作「文字/图标」时它太暗（在 --raised-2 上只有 3.37:1），一律用 --accent-ink。 */
     --accent: #3b6cf6;
-    --accent-soft: #eef3ff;
-    --warn: #c2710c;
-    --warn-soft: #fff8ec;
-    --danger: #d64545;
-    --danger-soft: #fef2f2;
-    --ok: #0f9d63;
-    --ok-soft: #ecfdf5;
-    --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 4px 14px rgba(16, 24, 40, .05);
-    --radius: 12px;
+    --accent-active: #3260e8;
+    --accent-ink: #9db9ff;
+    --accent-soft: #17233d;
+    --accent-line: #2b3f6b;
+    --accent-ring: rgba(157, 185, 255, .38);
+
+    /* ---- 状态四元组：soft 底 / 主色 / 描边 / 浅文字 ----
+       分工：.tag / .badge-score 这类小药丸用「主色」当文字（色相辨识强）；
+       .verdict 这类大块横幅用「-ink」浅文字（整段中文用高饱和色会在深底上振动）。
+       --danger-fill 单独存在，因为录音按钮是实心填充 + 白字：
+       白字在原先的 #e05252 上只有 3.82:1（现存浅色主题里就有的一处 AA 违规），
+       压到 #c9403f 才够 4.90:1。 */
+    --ok-soft: #0e2a1f;      --ok: #34d399;      --ok-line: #256b4f;      --ok-ink: #7ff0c0;
+    --warn-soft: #2c2110;    --warn: #e0a63c;    --warn-line: #6d5219;    --warn-ink: #f7d08a;
+    --danger-soft: #2e1517;  --danger: #f0706f;  --danger-line: #7d3437;  --danger-ink: #fbb0b0;
+    --danger-fill: #c9403f;
+    --neutral-soft: #1c222b; --neutral-ink: #c2cad7; --neutral-line: #2b3341;
+
+    /* ---- 高度合成：暗色下投影退化为环境遮蔽，主角是顶边 1px 内高光 ---- */
+    --edge: inset 0 1px 0 rgba(255, 255, 255, .04);
+    --shadow: 0 1px 2px rgba(0, 0, 0, .50), 0 8px 24px rgba(0, 0, 0, .35);
+
+    /* ---- 尺度令牌：把原先散落的 26 个间距魔法数、13 档字号、7 档圆角收敛 ----
+       注意：这些是「同值替换」用的，不改变任何现有渲染 */
+    --sp-1: 4px;   --sp-2: 8px;   --sp-3: 12px;
+    --sp-4: 16px;  --sp-5: 22px;  --sp-6: 32px;
+
+    --fs-2xs: 10.5px;  --fs-xs: 11.5px;   --fs-sm: 12.5px;  --fs-md: 13.5px;
+    --fs-base: 14px;   --fs-lg: 16px;     --fs-xl: 19px;    --fs-2xl: 46px;
+
+    --radius-xs: 6px;  --radius-sm: 8px;  --radius-md: 10px;
+    --radius: 12px;    --radius-full: 999px;
+
+    --fw-medium: 500;  --fw-semi: 600;    --fw-bold: 700;
+
+    --dur-1: 120ms;    --dur-2: 200ms;    --dur-3: 320ms;
+    --ease: cubic-bezier(.22, .61, .36, 1);
   }
   * { box-sizing: border-box; }
   /* hidden 属性靠 UA 样式的 display:none 生效，但作者样式里的 display:block
@@ -40,8 +104,12 @@
 
   /* ---------- 顶栏 ---------- */
   header {
-    background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+    /* 吸顶栏是少数几个保留投影的元素之一（暗色下投影只在"真正漂浮"时才有意义） */
+    background: linear-gradient(180deg, rgba(20, 26, 36, .94) 0%, rgba(16, 21, 29, .94) 100%);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--line);
+    box-shadow: var(--shadow);
     padding: 16px 26px;
     display: flex;
     align-items: center;
@@ -54,44 +122,81 @@
   header .logo {
     width: 30px; height: 30px;
     border-radius: 9px;
-    background: linear-gradient(135deg, var(--accent), #7a5cf0);
+    background: linear-gradient(135deg, #5b86f7, #8b6cf5);
     display: grid;
     place-items: center;
-    color: #fff;
+    color: #fff;                /* 白字落在饱和渐变上，不是落在深底上，保持纯白是对的 */
     font-size: 15px;
     font-weight: 700;
-    box-shadow: 0 2px 8px rgba(59, 108, 246, .3);
+    box-shadow: 0 2px 12px rgba(91, 134, 247, .45);
     flex: none;
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.2px; }
-  header .sub { color: var(--muted); font-size: 12.5px; }
-  /* 真实 / 模拟 切换 */
+  header h1 { font-size: var(--fs-lg); margin: 0; font-weight: 650; letter-spacing: -.2px; }
+  header .sub { color: var(--muted); font-size: var(--fs-sm); }
+  /* 真实 / 模拟：小标签切换器（不是按钮组）。
+     去掉容器底色与外框，两个选项各自成一个小胶囊，选中态靠底色 + 亮字表达。 */
   .modeswitch {
     margin-left: auto;
     display: flex;
-    gap: 2px;
-    padding: 3px;
-    background: #eef1f6;
-    border: 1px solid var(--line);
-    border-radius: 9px;
+    align-items: center;
+    gap: 6px;
   }
   .modeswitch button {
     width: auto;
-    padding: 5px 13px;
-    font-size: 12.5px;
+    padding: 3px 10px;
+    font-size: var(--fs-xs);
     font-weight: 500;
+    letter-spacing: .2px;
     background: transparent;
-    color: var(--muted);
-    border: none;
-    border-radius: 6px;
+    color: var(--muted-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-full);
     box-shadow: none;
   }
-  .modeswitch button:hover:not(:disabled) { background: #e3e8f1; color: var(--text); }
+  .modeswitch button:hover:not(:disabled) {
+    background: var(--raised);
+    color: var(--text);
+    border-color: var(--line-strong);
+  }
   .modeswitch button.on {
-    background: #fff;
-    color: var(--accent);
+    /* 选中底色用 --accent-line（vs 顶栏 1.69，清晰可辨），
+       不能用 --accent-soft —— 那只有 1.12，肉眼根本看不出选中。
+       （同样的坑在气泡上已经踩过一次：填充类对比度必须远高于发丝线。） */
+    background: var(--accent-line);
+    color: var(--accent-ink);
+    border-color: var(--accent-line);
     font-weight: 600;
-    box-shadow: 0 1px 3px rgba(16, 24, 40, .1);
+    animation: chipIn var(--dur-3) var(--ease);
+  }
+  /* 选中时轻微「弹」一下，给切换一点触感。
+     没用几何滑块（::before + translateX）是因为那依赖两个按钮等宽 —— 中文标签
+     一改字数就错位，属于脆弱的实现。 */
+  @keyframes chipIn {
+    from { transform: scale(.93); opacity: .6; }
+    to   { transform: none; opacity: 1; }
+  }
+
+  /* ---------- 主操作按钮：蓝色渐变 ----------
+     「开始面试」「发送回答」「按住说话」共用这一套实心渐变外观。
+     填充色不能比 --accent 更亮 —— 白字在其上正好 4.50:1，再亮就跌破 AA。
+     所以顶端用 --accent，底端用更深的 #2f5ae0，文字垂直居中，实际对比度 ≥ 4.50。
+
+     ⚠️ 与禁用态的关系：button:disabled 的优先级和这里**完全相同**（都是 0,1,1），
+     所以「禁用时显示扁平灰」靠的是**源码顺序** —— button:disabled 在本规则之后。
+     挪动本规则时会静默改坏禁用态（禁用的按钮会亮着渐变），别把它移到最后。 */
+  button.primary,
+  button.hold {
+    background: linear-gradient(180deg, var(--accent), #2f5ae0);
+    border-color: transparent;
+    box-shadow: 0 2px 14px rgba(59, 108, 246, .35);
+  }
+  /* 渐变按钮的 hover 必须在这里单独写：基类那条 button:hover 的优先级更高，
+     会把背景压成纯色，渐变就没了。往更暗的方向走，对比度只增不减。 */
+  button.primary:hover:not(:disabled),
+  button.hold:hover:not(:disabled) {
+    background: linear-gradient(180deg, #3260e8, #2a52cc);
+    box-shadow: 0 0 0 1px rgba(157, 185, 255, .35), 0 6px 20px rgba(59, 108, 246, .55);
+    transform: translateY(-1px);
   }
 
   /* 长按说话 */
@@ -99,19 +204,37 @@
     margin-top: 14px;
     padding: 15px;
     font-size: 14.5px;
-    border-radius: 10px;
-    background: linear-gradient(180deg, #4b79f7, #3260e8);
+    border-radius: var(--radius-md);
     user-select: none;
     -webkit-user-select: none;
-    touch-action: none;        /* 长按时不要触发页面滚动 / 缩放 */
+    touch-action: manipulation;  /* 去掉移动端点击延迟；改点击模式后不再需要禁用滚动 */
   }
   button.hold.recording {
-    background: linear-gradient(180deg, #e05252, #c93b3b);
+    /* 原先是 #e05252，白字只有 3.82:1（浅色主题里就存在的一处 AA 违规）。
+       --danger-fill (#c9403f) 是 4.90:1。 */
+    background: linear-gradient(180deg, var(--danger-fill), #a83635);
     animation: pulse 1.1s ease-in-out infinite;
   }
+
+  /* ---------- 按钮里的小图标 ---------- */
+  /* 带图标的按钮用 flex + gap 排布，比给图标加 margin 更稳（图标在前在后都适用） */
+  .btn-ico {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .4em;
+  }
+  .ico {
+    width: 1.15em;      /* 跟随字号缩放，不写死 px */
+    height: 1.15em;
+    flex: none;
+    display: block;
+  }
+  /* 光圈的 0%/100% 必须带上按钮的常态发光，否则动画期间 box-shadow 被整个替换掉，
+     按钮看起来会"瘪"下去 —— 暗色里发光本身就是层次的一部分。 */
   @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 0 4px rgba(214, 69, 69, .16); }
-    50%      { box-shadow: 0 0 0 10px rgba(214, 69, 69, .04); }
+    0%, 100% { box-shadow: 0 2px 14px rgba(201, 64, 63, .40), 0 0 0 4px rgba(201, 64, 63, .28); }
+    50%      { box-shadow: 0 2px 14px rgba(201, 64, 63, .40), 0 0 0 10px rgba(201, 64, 63, .06); }
   }
 
   /* ---------- 布局 ---------- */
@@ -125,20 +248,14 @@
     max-width: 1320px;
     margin: 0 auto;
   }
-  @media (max-width: 880px) {
-    main { grid-template-columns: 1fr; padding: 14px; }
-    /* 单栏时「两栏等高」不成立，改回按内容排布 + 限高滚动，
-       否则 flex:1 1 0 会把聊天区压成 0 高 */
-    .panel-chat { overflow: visible; }
-    #log { flex: none; min-height: 0; max-height: 60vh; }
-  }
 
   .panel {
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: var(--radius);
     padding: 16px;
-    box-shadow: var(--shadow);
+    /* 暗色下投影几乎不可见，层次改由「一道内顶高光」表达 */
+    box-shadow: var(--edge);
     min-height: 0;          /* 允许在 grid 里被压到比内容矮，滚动才生效 */
   }
   .panel h2 {
@@ -154,14 +271,24 @@
   .camera {
     width: 100%;
     aspect-ratio: 4 / 3;
-    background: linear-gradient(160deg, #1e2634, #0f1420);
-    border-radius: 10px;
+    /* 视频井必须是全页最暗之处。新的 page 底色(#0b0f16)比它原来的渐变还暗，
+       不往下压它就会「浮」出页面，读起来不像一块屏幕。 */
+    background: linear-gradient(160deg, #0a0e15, #06080d);
+    border-radius: var(--radius-md);
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
     position: relative;
-    border: 1px solid #1a2130;
+    /* 一圈明确的「屏幕外壳」—— 没有它，一块黑洞就只是黑洞 */
+    border: 1px solid var(--line-strong);
+    box-shadow: var(--edge), inset 0 2px 12px rgba(0, 0, 0, .60);
+  }
+  /* 真实设备在跑时给画面区一圈强调色辉光，让「摄像头已开」一眼可见 */
+  .camera.live {
+    border-color: var(--accent-line);
+    box-shadow: var(--edge), inset 0 2px 12px rgba(0, 0, 0, .60),
+                0 0 0 1px rgba(59, 108, 246, .35), 0 0 24px rgba(59, 108, 246, .18);
   }
   .camera img, .camera video {
     width: 100%; height: 100%;
@@ -169,17 +296,31 @@
     display: block;
   }
   .camera video { transform: scaleX(-1); }   /* 镜像，自拍视角更自然 */
-  .camera .placeholder { color: #5b6678; font-size: 12.5px; }
+  .camera .placeholder {
+    color: #8b96a8;
+    font-size: var(--fs-sm);
+    text-align: center;
+    padding: 0 16px;
+    line-height: 1.7;
+    /* 摄像头失败的提示是两行，要让它按 \n 断行 */
+    white-space: pre-line;
+  }
   .camera .badge {
     position: absolute;
     top: 9px; left: 9px;
-    background: rgba(0, 0, 0, .55);
-    backdrop-filter: blur(4px);
+    background: rgba(8, 11, 16, .62);
+    -webkit-backdrop-filter: blur(6px) saturate(1.3);
+    backdrop-filter: blur(6px) saturate(1.3);
     color: #fff;
-    font-size: 10.5px;
+    font-size: var(--fs-2xs);
     letter-spacing: .3px;
     padding: 3px 9px;
     border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, .10);
+  }
+  /* 不支持 backdrop-filter 时，半透明底压不住背后的画面 → 换成不透明底 */
+  @supports not ((backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px))) {
+    .camera .badge { background: rgba(8, 11, 16, .88); }
   }
 
   /* ---------- 表单控件 ---------- */
@@ -195,39 +336,60 @@
     width: 100%;
     padding: 9px 11px;
     border: 1px solid var(--line);
-    border-radius: 8px;
-    background: #fff;
+    border-radius: var(--radius-sm);
+    background: var(--raised);
     color: var(--text);
-    transition: border-color .15s, box-shadow .15s, background .15s, transform .06s;
+    transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease),
+                background var(--dur-2) var(--ease), transform var(--dur-1) var(--ease);
   }
   select:focus-visible, button:focus-visible {
     outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(59, 108, 246, .14);
+    /* 深底上 rgba(59,108,246,.14) 那种淡焦点环基本看不见，改用亮色描边 + 亮环 */
+    border-color: var(--accent-ink);
+    box-shadow: 0 0 0 3px var(--accent-ring);
   }
-  select:disabled { background: #fafbfd; color: var(--muted-2); }
+  select:disabled { background: var(--sunken); color: var(--muted-2); }
   button {
     cursor: pointer;
     background: var(--accent);
-    color: #fff;
+    color: #fff;               /* 白字 on #3b6cf6 = 4.50:1，压线过 AA */
     border-color: var(--accent);
     font-weight: 550;
-    box-shadow: 0 1px 3px rgba(59, 108, 246, .25);
+    box-shadow: 0 2px 12px rgba(59, 108, 246, .35);
   }
-  button:hover:not(:disabled) { background: #3260e8; }
-  button:active:not(:disabled) { transform: translateY(1px); }
-  button:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
+  button:hover:not(:disabled) {
+    /* 填充是「变暗」而不是「变亮」—— 变亮会让白字跌破 4.5，变暗只会让对比度更高。
+       hover 的存在感交给发光与抬升。 */
+    background: var(--accent-active);
+    box-shadow: 0 0 0 1px rgba(157, 185, 255, .35), 0 4px 16px rgba(59, 108, 246, .50);
+    transform: translateY(-1px);
+  }
+  button:active:not(:disabled) { transform: translateY(1px) scale(.99); }
+  button:disabled {
+    /* 暗底上 opacity:.42 会把按钮糊成一团泥，改为明确的「不可点」配色 */
+    cursor: not-allowed;
+    box-shadow: none;
+    background: var(--raised);
+    color: var(--muted-2);
+    border-color: var(--line);
+  }
   button.ghost {
-    background: #fff;
+    background: var(--raised);
     color: var(--text);
     border-color: var(--line);
-    box-shadow: none;
+    box-shadow: var(--edge);
   }
-  button.ghost:hover:not(:disabled) { background: #f7f9fc; border-color: #d3d9e3; }
+  /* 比 button:hover 多一个类，优先级更高，确保幽灵按钮拿到自己的 hover 而不是蓝色光晕 */
+  button.ghost:hover:not(:disabled) {
+    background: var(--raised-2);
+    border-color: var(--line-strong);
+    box-shadow: var(--edge);
+    transform: translateY(-1px);
+  }
   .row { display: flex; gap: 8px; margin-top: 12px; }
   .row button { margin: 0; }
   .hint {
-    font-size: 11.5px;
+    font-size: var(--fs-xs);
     color: var(--muted-2);
     margin-top: 14px;
     line-height: 1.6;
@@ -250,15 +412,15 @@
     overscroll-behavior: contain;   /* 滚到底不要把整页带着滚 */
     padding-right: 6px;
     scrollbar-width: thin;
-    scrollbar-color: #d3dae5 transparent;
+    scrollbar-color: #333c4a transparent;
   }
   #log::-webkit-scrollbar { width: 8px; }
   #log::-webkit-scrollbar-track { background: transparent; }
   #log::-webkit-scrollbar-thumb {
-    background: #d3dae5;
+    background: #333c4a;
     border-radius: 4px;
   }
-  #log::-webkit-scrollbar-thumb:hover { background: #bcc6d6; }
+  #log::-webkit-scrollbar-thumb:hover { background: #46505f; }
   .empty {
     color: var(--muted-2);
     font-size: 13px;
@@ -269,11 +431,30 @@
     display: flex;
     flex-direction: column;
     max-width: 86%;
-    animation: pop .22s ease-out;
+    animation: pop var(--dur-3) var(--ease);
   }
   @keyframes pop {
     from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: none; }
+  }
+  /* 「面试官正在思考」占位气泡 */
+  .thinking .text {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 20px;
+  }
+  .thinking .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted-2);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+  .thinking .dot:nth-child(2) { animation-delay: .18s; }
+  .thinking .dot:nth-child(3) { animation-delay: .36s; }
+  @keyframes blink {
+    0%, 60%, 100% { opacity: .28; transform: translateY(0); }
+    30%           { opacity: 1;   transform: translateY(-3px); }
   }
   .turn.q { align-self: flex-start; align-items: flex-start; }
   .turn.a { align-self: flex-end; align-items: flex-end; }
@@ -283,7 +464,11 @@
     margin-bottom: 5px;
     padding: 0 3px;
     font-weight: 500;
+    display: flex;          /* 图标与文字在一行内对齐 */
+    align-items: center;
+    gap: .35em;
   }
+  .turn.a .who { color: var(--accent-ink); }   /* 候选人标签跟着偏蓝，强化左右区分 */
   .text {
     white-space: pre-wrap;
     word-break: break-word;
@@ -292,14 +477,17 @@
     line-height: 1.65;
   }
   .turn.q .text {
-    background: #fff;
+    /* 面试官：灰色气泡，居左（对齐由 .turn.q 的 align-self 决定） */
+    background: var(--bubble-q);
     border: 1px solid var(--line);
-    border-top-left-radius: 4px;
+    border-top-left-radius: 4px;   /* 靠近说话人那一角收窄，指向来源 */
+    box-shadow: var(--edge);
   }
   .turn.a .text {
-    background: var(--accent-soft);
-    border: 1px solid #dde7ff;
-    color: #1c2b52;
+    /* 候选人：蓝色气泡，居右 */
+    background: var(--bubble-a);
+    border: 1px solid transparent;
+    color: var(--bubble-a-ink);
     border-top-right-radius: 4px;
   }
   .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -307,18 +495,18 @@
   .tag {
     font-size: 11px;
     padding: 3px 9px;
-    border-radius: 999px;
-    background: #f2f4f8;
-    color: #4b5563;
-    border: 1px solid var(--line);
+    border-radius: var(--radius-full);
+    background: var(--neutral-soft);
+    color: var(--neutral-ink);
+    border: 1px solid var(--neutral-line);
     font-weight: 500;
     white-space: nowrap;
   }
-  .tag.ok { background: var(--ok-soft); color: var(--ok); border-color: #b6ecd2; }
-  .tag.warn { background: var(--warn-soft); color: var(--warn); border-color: #f5dfb8; }
-  .tag.danger { background: var(--danger-soft); color: var(--danger); border-color: #f7cfcf; }
+  .tag.ok { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-line); }
+  .tag.warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-line); }
+  .tag.danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-line); }
   .note {
-    font-size: 11.5px;
+    font-size: var(--fs-xs);
     color: var(--muted);
     margin-top: 5px;
     padding: 0 3px;
@@ -326,6 +514,33 @@
     max-width: 100%;
   }
   .turn.a .note { text-align: right; }
+
+  /* ---------- AI 点评卡片 ----------
+     独立于两侧气泡的第三张卡片，横跨整行，放在每一组问答下方。
+     它刻意不靠左也不靠右：它既不是「面试官说的」也不是「候选人说的」，
+     而是系统对这场问答的评注 —— 视觉上必须自成一路，否则又会被读成某一方的话。 */
+  .comment {
+    align-self: stretch;      /* flex 列容器里拉满整行 */
+    max-width: 100%;
+    background: var(--note-bg);
+    border: 1px solid var(--note-line);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    font-size: var(--fs-xs);
+    line-height: 1.6;
+    animation: pop var(--dur-3) var(--ease);
+  }
+  .comment .head {
+    display: flex;
+    align-items: center;
+    gap: .35em;
+    font-weight: 600;
+    color: var(--note-ink);
+    margin-bottom: 4px;
+  }
+  .comment .head .ico { width: 1.25em; height: 1.25em; }
+  .comment .body { color: #efe6d5; }
+  .comment .body + .body { margin-top: 3px; }
 
   /* ---------- 状态栏 ---------- */
   .status { font-size: 12px; color: var(--muted); margin-top: 12px; min-height: 18px; line-height: 1.5; }
@@ -345,98 +560,182 @@
 
   /* ---------- 报告 ---------- */
   #report { display: none; grid-column: 1 / -1; }
-  .report-top {
+  /* ---------- 综合得分卡片（报告区的视觉重点）---------- */
+  .score-card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 18px;
+    margin-bottom: 18px;
+    background: var(--sunken);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--edge);
+  }
+  .score-card .title {
+    font-size: 12px;
+    color: var(--muted-2);
+    font-weight: 600;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+  }
+  .score-main {
     display: flex;
     align-items: center;
     gap: 22px;
     flex-wrap: wrap;
-    padding-bottom: 18px;
-    border-bottom: 1px solid var(--line-soft);
-    margin-bottom: 18px;
   }
-  .score-box { display: flex; flex-direction: column; }
-  .score-box .cap { font-size: 11px; color: var(--muted-2); margin-bottom: 2px; }
-  .score-line { display: flex; align-items: baseline; gap: 5px; }
-  .score-line .num {
-    font-size: 46px;
-    font-weight: 700;
-    line-height: 1;
-    letter-spacing: -1.5px;
+
+  /* 圆形进度环：浅灰底环 + 蓝色已得分弧。
+     半径 52 + 描边 10 → 外径 57，稳稳落在 120 的 viewBox 内。 */
+  .ring-wrap { position: relative; width: 128px; height: 128px; flex: none; }
+  .ring {
+    width: 100%; height: 100%;
+    transform: rotate(-90deg);   /* 让 0% 从 12 点方向起算，而不是 3 点 */
   }
-  .score-line .num.pass { color: var(--ok); }
-  .score-line .num.hold { color: var(--warn); }
-  .score-line .num.fail { color: var(--danger); }
-  .score-line .num.none { color: var(--muted-2); }
-  .score-line .unit { font-size: 13px; color: var(--muted-2); }
+  .ring-track { fill: none; stroke: var(--raised-2); stroke-width: 10; }
+  .ring-fill {
+    fill: none;
+    stroke: var(--accent);       /* 已得分部分：蓝 */
+    stroke-width: 10;
+    stroke-linecap: round;
+    /* 用 dashoffset 而不是改 dasharray：dasharray 恒为整圈周长，靠 offset 决定露出多少，
+       这样圆弧两端始终是圆头。
+       不给 transition —— 扫入动画由 JS 用 Web Animations 驱动，
+       CSS 过渡会和它抢同一个属性。 */
+  }
+  .ring-num {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .ring-num .v { font-size: 32px; font-weight: 700; line-height: 1; letter-spacing: -1px; }
+  .ring-num .u { font-size: 11px; color: var(--muted-2); margin-top: 3px; }
+
+  /* 三项信息：小标签块，整齐一行 */
+  .facts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .fact {
+    flex: 1;
+    min-width: 92px;
+    padding: 9px 12px;
+    text-align: center;
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--edge);
+  }
+  .fact .k { font-size: 11px; color: var(--muted-2); }
+  .fact .v { font-size: 16px; font-weight: 650; margin-top: 2px; letter-spacing: -.2px; }
   .verdict {
     flex: 1;
     min-width: 220px;
     padding: 12px 16px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     font-size: 13.5px;
     font-weight: 550;
     line-height: 1.5;
+    /* 中性兜底：类名里的 verdict 枚举直接来自后端，万一后端多出一个值
+       （比如 pending），元素会变成 class="verdict pending" —— 没有这条基类样式
+       它就完全透明，看起来像坏了。有了它至少是「中性」。
+       不改变任何现有枚举的渲染。 */
+    background: var(--neutral-soft);
+    color: var(--neutral-ink);
+    border: 1px solid var(--neutral-line);
   }
-  .verdict.pass { background: var(--ok-soft); color: #0a6b46; border: 1px solid #b6ecd2; }
-  .verdict.hold { background: var(--warn-soft); color: #8a5a09; border: 1px solid #f5dfb8; }
+  /* 大块横幅用 -ink 浅文字：整段 13.5px 中文用高饱和主色在深底上会「振动」 */
+  .verdict.pass { background: var(--ok-soft); color: var(--ok-ink); border: 1px solid var(--ok-line); }
+  .verdict.hold { background: var(--warn-soft); color: var(--warn-ink); border: 1px solid var(--warn-line); }
   .verdict.fail,
-  .verdict.review { background: var(--danger-soft); color: #9b2c2c; border: 1px solid #f7cfcf; }
-  .verdict.unknown { background: #f4f5f7; color: #4b5563; border: 1px solid var(--line); }
-
-  .summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
-  .stat {
-    flex: 1;
-    min-width: 96px;
-    background: #fafbfd;
-    border: 1px solid var(--line-soft);
-    border-radius: 9px;
-    padding: 10px 13px;
-  }
-  .stat .k { font-size: 11px; color: var(--muted-2); margin-bottom: 3px; }
-  .stat .v { font-size: 19px; font-weight: 650; letter-spacing: -.3px; }
+  .verdict.review { background: var(--danger-soft); color: var(--danger-ink); border: 1px solid var(--danger-line); }
+  .verdict.unknown { background: var(--neutral-soft); color: var(--neutral-ink); border: 1px solid var(--neutral-line); }
 
   .rounds { display: flex; flex-direction: column; gap: 8px; }
   .round {
     display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 11px 14px;
+    flex-direction: column;   /* 卡片：头部一行，正文一行 */
+    gap: 8px;
+    padding: 12px 14px;
     border: 1px solid var(--line-soft);
-    border-radius: 9px;
-    background: #fff;
-    transition: border-color .15s, background .15s;
+    border-radius: var(--radius-md);
+    background: var(--raised);
+    box-shadow: var(--edge);
+    transition: border-color var(--dur-2) var(--ease), background var(--dur-2) var(--ease);
+    /* both: 在 animation-delay 期间保持 from 状态（不可见），
+       否则延迟未到的行会先闪一下再入场。延迟由 JS 逐行设置。 */
+    animation: rowIn var(--dur-3) var(--ease) both;
   }
-  .round:hover { border-color: var(--line); background: #fcfdff; }
-  .round.flagged { border-color: #f7cfcf; background: #fffafa; }
-  .round .idx {
-    font-size: 11.5px;
-    color: var(--muted-2);
-    min-width: 46px;
-    font-weight: 500;
+  @keyframes rowIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .round:hover { border-color: var(--line-strong); background: var(--raised-2); }
+  .round.flagged { border-color: var(--danger-line); background: var(--danger-soft); }
+
+  /* 卡片头部：轮次 + 圆形分数徽章 + 右侧状态标签 */
+  .round-head { display: flex; align-items: center; gap: 10px; }
+  .round .idx { font-size: var(--fs-xs); color: var(--muted-2); font-weight: 500; flex: none; }
+  .round .flags { display: flex; gap: 6px; flex: none; margin-left: auto; }
+
+  /* 圆形分数徽章：高=绿 / 中=橙 / 低=灰 */
+  .badge-score {
+    width: 28px; height: 28px;
     flex: none;
-  }
-  .chip {
-    font-size: 12px;
-    font-weight: 650;
-    min-width: 34px;
-    text-align: center;
-    padding: 3px 8px;
-    border-radius: 6px;
-    flex: none;
-  }
-  .chip.pass { background: var(--ok-soft); color: var(--ok); }
-  .chip.hold { background: var(--warn-soft); color: var(--warn); }
-  .chip.fail { background: var(--danger-soft); color: var(--danger); }
-  .chip.none { background: #f2f4f8; color: var(--muted-2); }
-  .round .cmt {
-    flex: 1;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
     font-size: 13px;
-    color: #3f4859;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-weight: 650;
+    letter-spacing: -.2px;
+    /* 中性兜底：scoreClass 的档位将来若有变动，不至于整块没样式 */
+    background: var(--neutral-soft);
+    color: var(--neutral-ink);
+    border: 1px solid var(--neutral-line);
   }
-  .round .flags { display: flex; gap: 6px; flex: none; }
+  .badge-score.pass { background: var(--ok-soft);   color: var(--ok);   border-color: var(--ok-line); }
+  .badge-score.hold { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-line); }
+  /* 低分走中性灰（按需求），不用红色 */
+  .badge-score.fail { background: var(--neutral-soft); color: var(--neutral-ink); border-color: var(--neutral-line); }
+  /* 没有分数时用虚线空徽章，与「低分灰」区分开，避免两者看起来一样 */
+  .badge-score.none { background: transparent; color: var(--muted-2); border: 1px dashed var(--line); }
+
+  .round .cmt {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);   /* 它是卡片主文本：暗色下用最亮的一档 */
+    word-break: break-word;   /* 正文整段换行，不再单行截断 */
+  }
+
+  /* ---------- 响应式（必须放在样式表最末尾）----------
+     媒体查询本身**不加优先级**：它里面的规则和外面的规则同优先级，
+     谁在文档里靠后谁赢。所以这个块一旦被写在前面，
+     后面任何一条 `#log { flex: ... }` / `.panel-chat { overflow: ... }`
+     都会把它悄悄盖掉，单栏布局就退回「聊天区被压成 0 高」的老 bug。
+     改动这个文件时，请保持它在最后。 */
+  @media (max-width: 880px) {
+    main { grid-template-columns: 1fr; padding: 14px; }
+    /* 单栏时「两栏等高」不成立，改回按内容排布 + 限高滚动，
+       否则 flex:1 1 0 会把聊天区压成 0 高 */
+    .panel-chat { overflow: visible; }
+    #log { flex: none; min-height: 0; max-height: 60vh; }
+  }
+
+  /* ---------- 尊重系统的「减少动态效果」----------
+     通杀所有动画与过渡，但**加载转圈必须活下来** ——
+     它承载的是「正在处理」这个信息，停掉等于把信息丢掉。 */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      /* 延迟也必须清零：报告逐轮行用了 animation-fill-mode: both，
+         延迟期间保持「不可见」，不清零的话这些行会白等一拍才显示 */
+      animation-delay: 0ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+    .spinner::after { animation: spin 1.4s linear infinite !important; }
+  }
 </style>
 </head>
 <body>
@@ -455,7 +754,7 @@
   <!-- 左：画面 + 控制 -->
   <section class="panel">
     <h2>候选人画面</h2>
-    <div class="camera">
+    <div class="camera" id="cameraBox">
       <span class="badge" id="camBadge">模拟</span>
       <span class="placeholder" id="camPlaceholder">尚未开始</span>
       <img id="cam" alt="候选人画面" hidden>
@@ -464,10 +763,16 @@
 
     <!-- 真实设备模式 -->
     <div id="realControls" hidden>
-      <button id="holdBtn" class="hold" disabled>按住说话，松开发送</button>
+      <!-- 文案必须包一层 span：JS 切换录音态时会重写它，
+           直接写 textContent 会把图标一起抹掉 -->
+      <button id="holdBtn" class="hold btn-ico" disabled>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        <span id="holdLabel">点击开始回答</span>
+      </button>
       <p class="hint">
-        按住时开始录音并持续抽帧，松开后一起发给面试官。<br>
-        没录到声音（或按得太短）会自动使用题库里的<strong>预设答案</strong>。
+        点一下开始录音，回答完<strong>再点一下</strong>结束并发送。<br>
+        录音期间会持续抽帧；没录到声音（或录得太短）会自动使用题库里的
+        <strong>预设答案</strong>。
       </p>
     </div>
 
@@ -480,11 +785,14 @@
     </div>
 
     <div class="row">
-      <button id="startBtn">开始面试</button>
-      <button id="sendBtn" disabled hidden>发送回答</button>
+      <button id="startBtn" class="primary">开始面试</button>
+      <button id="sendBtn" class="primary" disabled hidden>发送回答</button>
     </div>
     <div class="row">
-      <button id="reportBtn" class="ghost" disabled>查看报告</button>
+      <button id="reportBtn" class="ghost btn-ico" disabled>
+        查看报告
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      </button>
     </div>
 
     <div class="status" id="status"></div>
@@ -502,7 +810,9 @@
 
 const $ = (id) => document.getElementById(id);
 const cam = $("cam"), camPlaceholder = $("camPlaceholder"), camBadge = $("camBadge");
+const cameraBox = $("cameraBox");
 const camVideo = $("camVideo"), holdBtn = $("holdBtn"), modeSwitch = $("modeSwitch");
+const holdLabel = $("holdLabel");   // holdBtn 里只放文案的 span，图标不在里面
 const realControls = $("realControls"), simControls = $("simControls");
 const frameSel = $("frameSel"), audioSel = $("audioSel");
 const startBtn = $("startBtn"), sendBtn = $("sendBtn"), reportBtn = $("reportBtn");
@@ -554,15 +864,47 @@ function el(tag, cls, text) {
   return n;
 }
 
+// 系统是否要求「减少动态效果」。滚动也要跟着降级 —— CSS 里的
+// prefers-reduced-motion 管不到 JS 的 scrollTo behavior。
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 function clearEmpty() {
   const e = log.querySelector(".empty");
   if (e) e.remove();
 }
 
+// 「面试官正在思考」占位气泡。一轮真实调用要等 10-20 秒，
+// 期间聊天区毫无反馈，是全站最大的体验空洞。
+let thinkingEl = null;
+
+function showThinking() {
+  hideThinking();
+  clearEmpty();
+  const box = el("div", "turn q thinking");
+  box.appendChild(el("div", "who", "面试官"));
+  const text = el("div", "text");
+  for (let i = 0; i < 3; i++) text.appendChild(el("span", "dot"));
+  box.appendChild(text);
+  log.appendChild(box);
+  log.scrollTo({ top: log.scrollHeight, behavior: REDUCE ? "auto" : "smooth" });
+  thinkingEl = box;
+}
+
+function hideThinking() {
+  if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; }
+}
+
 function addTurn(kind, who, text, tags) {
+  hideThinking();   // 真气泡进来时，占位气泡必须让位
   clearEmpty();
   const box = el("div", "turn " + kind);
-  box.appendChild(el("div", "who", who));
+  // 说话人标签带图标：面试官=机器人、候选人=人形。
+  // who 走 createTextNode 而不是拼进 innerHTML —— 标签里含来源说明（如「真实设备」），
+  // 拼字符串容易在将来引入注入问题。
+  const whoEl = el("div", "who");
+  whoEl.innerHTML = kind === "q" ? ICON_BOT : ICON_USER;   // 常量，不含任何用户数据
+  whoEl.appendChild(document.createTextNode(who));
+  box.appendChild(whoEl);
   box.appendChild(el("div", "text", text));
   if (tags && tags.length) {
     const meta = el("div", "meta");
@@ -571,8 +913,43 @@ function addTurn(kind, who, text, tags) {
   }
   log.appendChild(box);
   // 滚的是 #log 容器本身，不用 scrollIntoView —— 后者会连带把整页也滚下去
-  log.scrollTo({ top: log.scrollHeight, behavior: "smooth" });
+  log.scrollTo({ top: log.scrollHeight, behavior: REDUCE ? "auto" : "smooth" });
   return box;
+}
+
+// 三种说话人的图标（内联 SVG，与按钮上的麦克风/文档图标同一套写法）。
+// 用户原始需求里三类内容分别标了 🤖 / 👤 / 💡，这里用 SVG 而不是 emoji：
+// emoji 在各平台字体不同、大小与基线也压不准，混在文字标签里会很跳。
+const ICON_BOT =
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="4" y="6" width="16" height="14" rx="2"/><path d="M12 6V2"/>' +
+  '<circle cx="9" cy="13" r="1"/><circle cx="15" cy="13" r="1"/></svg>';
+const ICON_USER =
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+
+// 点评卡片的灯泡图标（内联 SVG，写法与按钮上的图标一致）
+const ICON_BULB =
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M9 18h6"/><path d="M10 22h4"/>' +
+  '<path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>';
+
+// AI 点评卡片：独立于两侧气泡，横跨整行，放在每一组问答下方。
+// 挂在 #log 上而不是回答气泡里 —— 它是「系统对这场问答的评注」，
+// 放进候选人气泡里会被读成候选人自己说的话。
+function appendComment(comment, attention) {
+  if (!comment && !attention) return;
+  const card = el("div", "comment");
+  const head = el("div", "head");
+  head.innerHTML = ICON_BULB + "AI 点评";   // 常量拼接，不含用户数据
+  card.appendChild(head);
+  if (comment) card.appendChild(el("div", "body", comment));
+  if (attention) card.appendChild(el("div", "body", "画面观察：" + attention));
+  log.appendChild(card);
+  log.scrollTo({ top: log.scrollHeight, behavior: REDUCE ? "auto" : "smooth" });
 }
 
 // 把 base64 音频播出来
@@ -648,22 +1025,34 @@ frameSel.addEventListener("change", () => showFrame(frameSel.value));
 // ---------------------------------------------------------------- 真实设备采集
 
 const FRAME_INTERVAL_MS = 2000;   // 抽帧间隔，与后端 config.FRAME_INTERVAL_SEC 一致
-const MIN_HOLD_MS = 150;          // 比这更短的按动视为误触，不发送
+const MIN_RECORD_MS = 300;        // 比这更短的录音视为误触（连点两下），不发送
 
 let mediaStream = null;      // getUserMedia 拿到的流
 let recorder = null;         // MediaRecorder
 let recChunks = [];          // 录音分片
 let capturedFrames = [];     // 抽到的帧 Blob
 let frameTimer = null;
-let holdFrom = 0;
+let recordFrom = 0;
 let capturing = false;
 let lastCapture = "";        // 上一轮采集情况，降级时显示出来辅助排查
 const grabCanvas = document.createElement("canvas");
+
+// 真实模式但拿不到画面时，画面区必须说点什么。
+// 否则三个元素全被隐藏（模拟图被 setMode 藏、视频没出来、占位被 showFrame 藏过），
+// 剩下一个全黑的空框 —— 用户只会看到「摄像头是黑的」，完全无从判断原因。
+function showCameraNotice(msg) {
+  cam.hidden = true;
+  camVideo.hidden = true;
+  cameraBox.classList.remove("live");
+  camPlaceholder.textContent = msg;
+  camPlaceholder.hidden = false;
+}
 
 async function openCamera() {
   if (mediaStream) return true;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     setStatus("此浏览器不支持摄像头采集（需要 https 或 localhost）", true);
+    showCameraNotice("浏览器不支持摄像头采集\n需用 localhost 或 https 打开");
     return false;
   }
   try {
@@ -674,12 +1063,17 @@ async function openCamera() {
   } catch (err) {
     cameraReady = false;
     setStatus("打不开摄像头/麦克风：" + err.message + " —— 可切到「模拟数据」继续", true);
+    showCameraNotice("摄像头未就绪\n" + err.name + "：可切到「模拟数据」继续");
     return false;
   }
   camVideo.srcObject = mediaStream;
   camVideo.hidden = false;
   camPlaceholder.hidden = true;
   cam.hidden = true;
+  cameraBox.classList.add("live");   // 画面区亮起强调色辉光
+  // 元素在 display:none 时被赋 srcObject，单靠 autoplay 属性有时不会起播，
+  // 表现就是「摄像头是黑的」—— 显式 play() 兜住。
+  camVideo.play().catch(() => {});
   cameraReady = true;
   refreshButtons();
   return true;
@@ -693,6 +1087,7 @@ function closeCamera() {
   }
   camVideo.srcObject = null;
   camVideo.hidden = true;
+  cameraBox.classList.remove("live");
   cameraReady = false;
 }
 
@@ -730,48 +1125,63 @@ function stopCapture() {
   });
 }
 
-// ---- 长按：按住开始采集，松开停止并发送 ----
+// ---- 点击切换：点一下开始采集，再点一下结束并发送 ----
+// 早先是「按住说话、松开发送」。改成点击是因为回答一段话要十几秒到几十秒，
+// 全程按住鼠标既别扭、又容易中途不小心松开。
 
-async function onHoldStart(e) {
+const HOLD_IDLE_LABEL = "点击开始回答";
+const HOLD_REC_LABEL = "点击结束并发送";
+
+async function startRecording() {
   if (capturing || holdBtn.disabled) return;
-  e.preventDefault();
-  holdFrom = Date.now();
-  if (!startCapture()) return;
+  recordFrom = Date.now();
+  if (!startCapture()) return;      // 没有可用麦克风时，startCapture 内部已报错
   capturing = true;
   holdBtn.classList.add("recording");
-  holdBtn.textContent = "松开即可发送…";
-  setStatus("正在录音并抽帧…");
+  holdLabel.textContent = HOLD_REC_LABEL;
+  setStatus("正在录音并抽帧…说完再点一下按钮结束。");
 }
 
-async function onHoldEnd(e) {
+async function stopRecording() {
   if (!capturing) return;
-  e.preventDefault();
   capturing = false;
   holdBtn.classList.remove("recording");
-  holdBtn.textContent = "按住说话，松开发送";
+  holdLabel.textContent = HOLD_IDLE_LABEL;
   refreshButtons();
 
-  const heldMs = Date.now() - holdFrom;
+  const recordedMs = Date.now() - recordFrom;
   const audioBlob = await stopCapture();
 
-  if (heldMs < MIN_HOLD_MS) {          // 误触，不白吃一轮
-    setStatus("按得太短，没有发送。");
+  if (recordedMs < MIN_RECORD_MS) {   // 连点两下的误触，不白吃一轮
+    setStatus("录音太短，没有发送。");
     return;
   }
 
-  // 记下本轮采集情况。降级时把它显示出来，好判断是「按太短」还是别的原因
+  // 记下本轮采集情况。降级时把它显示出来，好判断是「录太短」还是别的原因
   const frames = capturedFrames.slice();
-  lastCapture = "录音 " + (heldMs / 1000).toFixed(1) + " 秒 / " +
+  lastCapture = "录音 " + (recordedMs / 1000).toFixed(1) + " 秒 / " +
                 (audioBlob.size / 1024).toFixed(0) + " KB，抽到 " + frames.length + " 帧";
 
   // 录音为空 / 太短时后端转不出文字，会自动降级用题库预设答案
   await sendTurn(audioBlob, frames, "真实设备");
 }
 
-// 用 pointer 事件：按住后手指/鼠标移出按钮再松开也能正确收到 up
-holdBtn.addEventListener("pointerdown", onHoldStart);
-document.addEventListener("pointerup", onHoldEnd);
-document.addEventListener("pointercancel", onHoldEnd);
+// 丢弃正在进行的采集，**不发送**。
+// 改成点击模式后新增的必要防护：用户完全可能在录音途中去切模式。
+// 那时 closeCamera() 已经把音轨停了，若还走 stopRecording()，
+// 就会拿着一个已死的流去发送 —— 所以切模式前必须先把采集收干净。
+async function cancelCapture() {
+  if (!capturing) return;
+  capturing = false;
+  holdBtn.classList.remove("recording");
+  holdLabel.textContent = HOLD_IDLE_LABEL;
+  await stopCapture();               // 丢掉返回值，只为把 recorder 与抽帧定时器收掉
+}
+
+holdBtn.addEventListener("click", () => {
+  if (capturing) stopRecording();
+  else startRecording();
+});
 
 // ---------------------------------------------------------------- 模式切换
 
@@ -789,8 +1199,12 @@ async function setMode(next) {
 
   if (isReal) {
     cam.hidden = true;
+    // getUserMedia 在权限弹窗等待期间是「挂住」的 —— 既不成功也不失败。
+    // 这段时间画面区同样是空的，所以先摆一句提示，别让用户对着黑框猜。
+    if (!cameraReady) showCameraNotice("正在请求摄像头/麦克风权限…");
     await openCamera();
   } else {
+    await cancelCapture();   // 录音途中切走：先丢弃采集，再关摄像头
     closeCamera();
     cam.hidden = false;
     if (frameSel.value) showFrame(frameSel.value);
@@ -817,6 +1231,7 @@ async function startInterview() {
   if (mode === "real" && !cameraReady && !(await openCamera())) return;
 
   setBusy(true, "正在开始…");
+  showThinking();
   try {
     const data = await api("/api/start", { method: "POST" });
     state.started = true;
@@ -831,6 +1246,7 @@ async function startInterview() {
   } catch (err) {
     setStatus("开始失败：" + err.message, true);
   } finally {
+    hideThinking();   // 出错时也要收走，不能留个假气泡在那儿转
     setBusy(false);
   }
 }
@@ -839,6 +1255,7 @@ async function startInterview() {
 // 两条路径的差别只在 Blob 从哪来，发送与渲染完全一致。
 async function sendTurn(audioBlob, frameBlobs, sourceLabel) {
   setBusy(true, "面试官正在看和听…（真实模型约需 10-20 秒）");
+  showThinking();
   try {
     const form = new FormData();
     form.append("audio", audioBlob, "answer.webm");
@@ -855,10 +1272,8 @@ async function sendTurn(audioBlob, frameBlobs, sourceLabel) {
 
     const box = addTurn("a", "候选人（" + sourceLabel + "）",
                         data.answer || "（未识别到语音）", tags);
-    if (data.comment) box.appendChild(el("div", "note", "点评：" + data.comment));
-    if (data.attention_note) box.appendChild(el("div", "note", "画面：" + data.attention_note));
-    // fallback=true 表示这轮回答不是真的从录音转出来的，是题库预设答案顶上来的。
-    // 必须说清楚，否则会被当成候选人的真实回答。顺带把采集情况带上，便于排查。
+    // 降级 / 模型异常这两条讲的是「这轮是怎么来的」，属于机制说明，
+    // 和这轮回答是一体的，留在候选人气泡下面
     if (data.fallback) {
       let msg = "⚠️ 本轮没录到有效语音，已使用题库预设答案";
       if (lastCapture) msg += "（" + lastCapture + "）";
@@ -869,6 +1284,8 @@ async function sendTurn(audioBlob, frameBlobs, sourceLabel) {
     if (data.parsed === false) {
       box.appendChild(el("div", "note", "⚠️ 本轮模型输出异常，已改用兜底追问"));
     }
+    // AI 点评（含画面观察）单独成卡，放在这一组问答的下方
+    appendComment(data.comment, data.attention_note);
 
     addTurn("q", "面试官", data.question);
     playB64(data.audio);
@@ -882,7 +1299,10 @@ async function sendTurn(audioBlob, frameBlobs, sourceLabel) {
   } catch (err) {
     setStatus("处理失败：" + err.message, true);
   } finally {
-    // 禁用状态一律交给 refreshButtons() 派生，这里只负责收尾
+    // 禁用状态一律交给 refreshButtons() 派生，这里只负责收尾。
+    // hideThinking 要和 addTurn 里的那次重复，是为了「请求失败」这条路径 ——
+    // 那时没有真气泡进来，占位气泡得自己收走，否则会一直转。
+    hideThinking();
     setBusy(false);
   }
 }
@@ -925,57 +1345,92 @@ async function showReport() {
     const panel = $("report");
     panel.innerHTML = "";
 
-    // ---- 顶部：平均得分 + 结论横幅 ----
-    const top = el("div", "report-top");
+    // ---- 综合得分卡片：圆环 + 状态标签 + 三项信息 ----
+    const card = el("div", "score-card");
+    card.appendChild(el("div", "title", "综合得分"));
 
-    const box = el("div", "score-box");
-    box.appendChild(el("span", "cap", "平均得分"));
-    const line = el("div", "score-line");
-    line.appendChild(el("span", "num " + scoreClass(data.average_score),
-                        data.average_score == null ? "—" : String(data.average_score)));
-    if (data.average_score != null) line.appendChild(el("span", "unit", "/ 10"));
-    box.appendChild(line);
-    top.appendChild(box);
+    const main = el("div", "score-main");
+
+    // 圆环几何：整圈周长作 dasharray，得分占比决定 dashoffset（露出多少弧）
+    const R = 52;
+    const CIRC = 2 * Math.PI * R;
+    const score = data.average_score;
+    const frac = score == null ? 0 : Math.max(0, Math.min(1, score / 10));
+
+    const wrap = el("div", "ring-wrap");
+    wrap.innerHTML =
+      '<svg class="ring" viewBox="0 0 120 120" aria-hidden="true">' +
+      '<circle class="ring-track" cx="60" cy="60" r="' + R + '"/>' +
+      '<circle class="ring-fill" cx="60" cy="60" r="' + R + '" ' +
+      'stroke-dasharray="' + CIRC.toFixed(2) + '"/></svg>';
+    const fill = wrap.querySelector(".ring-fill");
+    const offset = CIRC * (1 - frac);
+    // 先把最终值写进**属性**：无论动画跑不跑，环的读数都是对的
+    fill.setAttribute("stroke-dashoffset", offset.toFixed(2));
+    const ringNum = el("div", "ring-num");
+    ringNum.appendChild(el("span", "v", score == null ? "—" : String(score)));
+    if (score != null) ringNum.appendChild(el("span", "u", "/ 10"));
+    wrap.appendChild(ringNum);
+    main.appendChild(wrap);
+    // 扫入动画只是锦上添花，用 Web Animations。
+    // 不写成「先把 offset 设成空环、下一帧再 rAF 改回真实值」—— rAF 不触发时
+    // （标签页切到后台就不会触发）环会永远停在空值上，6 分会显示成 0 分。
+    // 属性已经兜住了读数，动画失效最多是没有扫入效果。
+    if (!REDUCE && fill.animate) {
+      fill.animate(
+        [{ strokeDashoffset: CIRC }, { strokeDashoffset: offset }],
+        { duration: 460, easing: "cubic-bezier(.22,.61,.36,1)" }
+      );
+    }
 
     // verdict 是后端给的枚举，不用中文串做关键词匹配
-    top.appendChild(el("div", "verdict " + (data.verdict || "unknown"), data.recommendation));
-    panel.appendChild(top);
+    main.appendChild(el("div", "verdict " + (data.verdict || "unknown"), data.recommendation));
+    card.appendChild(main);
 
-    // ---- 统计小卡 ----
-    const sum = el("div", "summary");
-    const stats = [
-      ["问答轮数", String(data.turns)],
+    // 三项信息：小标签块，整齐一行
+    const facts = el("div", "facts");
+    for (const [k, v] of [
+      ["答题轮数", String(data.turns)],
       ["走神轮次", data.distracted_turns.length ? data.distracted_turns.join("、") : "无"],
       ["疑似作弊", data.cheating_turns.length ? data.cheating_turns.join("、") : "无"],
-    ];
-    for (const [k, v] of stats) {
-      const s = el("div", "stat");
-      s.appendChild(el("div", "k", k));
-      s.appendChild(el("div", "v", v));
-      sum.appendChild(s);
+    ]) {
+      const f = el("div", "fact");
+      f.appendChild(el("div", "k", k));
+      f.appendChild(el("div", "v", v));
+      facts.appendChild(f);
     }
-    panel.appendChild(sum);
+    card.appendChild(facts);
+    panel.appendChild(card);
 
     // ---- 逐轮一行：得分 + 一句点评 + 异常标记（不展示问答全文）----
     panel.appendChild(el("h2", null, "逐轮明细"));
     const rounds = el("div", "rounds");
+    let ri = 0;
     for (const r of data.records) {
       const row = el("div", "round" + (r.cheating ? " flagged" : ""));
-      row.appendChild(el("span", "idx", "第 " + r.index + " 轮"));
-      row.appendChild(el("span", "chip " + scoreClass(r.score),
-                         r.score == null ? "—" : String(r.score)));
-      row.appendChild(el("span", "cmt", r.comment || "—"));
+      // 逐行错开入场，报告从「瞬间弹出」变成有节奏
+      row.style.animationDelay = (ri++ * 25) + "ms";
+
+      // 头部：轮次 + 圆形分数徽章 …… 右侧状态标签
+      const head = el("div", "round-head");
+      head.appendChild(el("span", "idx", "第 " + r.index + " 轮"));
+      head.appendChild(el("span", "badge-score " + scoreClass(r.score),
+                          r.score == null ? "—" : String(r.score)));
       const flags = el("div", "flags");
       flags.appendChild(el("span", "tag " + (r.focused ? "ok" : "warn"),
                            r.focused ? "专注" : "走神"));
       if (r.cheating) flags.appendChild(el("span", "tag danger", "疑似作弊"));
-      row.appendChild(flags);
+      head.appendChild(flags);
+      row.appendChild(head);
+
+      // 正文：评价文字
+      row.appendChild(el("div", "cmt", r.comment || "—"));
       rounds.appendChild(row);
     }
     panel.appendChild(rounds);
 
     panel.style.display = "block";
-    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    panel.scrollIntoView({ behavior: REDUCE ? "auto" : "smooth", block: "start" });
     setStatus("报告已生成。");
   } catch (err) {
     setStatus("生成报告失败：" + err.message, true);
