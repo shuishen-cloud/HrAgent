@@ -25,6 +25,10 @@
     --radius: 12px;
   }
   * { box-sizing: border-box; }
+  /* hidden 属性靠 UA 样式的 display:none 生效，但作者样式里的 display:block
+     优先级更高会把它覆盖掉 —— 实测导致「切到真实模式后模拟图仍在显示」。
+     这条兜底规则必须加。 */
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI",
