@@ -168,6 +168,8 @@ def turn(
         # 本轮 LLM 是否按格式返回。False = 走了兜底（问题可能不是真问题），
         # 前端据此给个提示，别让人以为模型正常答了
         "parsed": result.parsed,
+        # 本轮回答来自题库预设而非真实语音转写（长按太短 / 没收到声音时）
+        "fallback": result.fallback,
     }
 
 

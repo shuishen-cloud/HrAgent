@@ -122,15 +122,81 @@ def test_多轮之后历史累积正确(pipeline):
     assert len(state.records) == 3
 
 
-def test_没有语音时标记为没有说话(pipeline):
+def test_没有语音且题库无预设时标记为没有说话(pipeline, monkeypatch, tmp_path):
+    """题库里没有对应预设答案时，空回答照旧走原路。"""
+    (tmp_path / "questions.json").write_text('{"questions": []}', encoding="utf-8")
+    monkeypatch.setattr(interview.config, "DATA_DIR", tmp_path)
+
     state = interview.InterviewState()
     interview.start(state)
-
     result = interview.run_turn(state, b"", [])   # 空录音
 
     assert result.answer == ""
+    assert result.fallback is False
     assert pipeline["answers"][0] == ""            # 空串照样送进 LLM
     assert state.history[1]["content"] == "（候选人没有说话）"
+
+
+# ---------------------------------------------------------------- 预设答案降级
+# 「长按太短」和「麦克风没收到声音」的结果都是转出空串，物理上等价，
+# 统一在 run_turn 里降级成题库预设答案，按轮次对应问题。
+
+def test_没转出语音时用题库预设答案(pipeline):
+    state = interview.InterviewState()
+    interview.start(state)
+
+    result = interview.run_turn(state, b"", [])
+
+    assert result.fallback is True
+    assert "太原工业学院" in result.answer        # q1 的预设答案
+    assert pipeline["answers"][0] == result.answer  # 预设答案确实送进了 LLM
+
+
+def test_降级按轮次对应题目(pipeline):
+    state = interview.InterviewState(max_turns=3)
+    interview.start(state)
+
+    answers = [interview.run_turn(state, b"", []).answer for _ in range(3)]
+
+    assert "太原工业学院" in answers[0]     # q1 自我介绍
+    assert "西瓜甜度" in answers[1]         # q2 项目深挖
+    assert "OpenCV" in answers[2]           # q3 技术深度
+
+
+def test_有真实语音时不降级(pipeline):
+    state = interview.InterviewState()
+    interview.start(state)
+
+    result = interview.run_turn(state, b"real audio", [])
+
+    assert result.fallback is False
+    assert result.answer == "这是第 10 字节的转写"   # 用的 STT 结果，不是预设
+
+
+def test_降级标记进报告(pipeline):
+    state = interview.InterviewState(max_turns=2)
+    interview.start(state)
+    interview.run_turn(state, b"", [])              # 第1轮降级
+    interview.run_turn(state, b"real audio", [])    # 第2轮真实
+
+    report = interview.build_report(state)
+    assert report["records"][0]["fallback"] is True
+    assert report["records"][1]["fallback"] is False
+
+    md = interview.render_markdown(state, report)
+    assert "预设答案" in md                    # 报告里标注出来，别当成真实回答
+
+
+def test_超出题库范围就不降级(pipeline):
+    """第 N 轮没有对应题目时保持空回答，不该套用别的题的答案。"""
+    state = interview.InterviewState(max_turns=12)
+    interview.start(state)
+    for _ in range(9):                              # 题库共 9 题
+        interview.run_turn(state, b"", [])
+    result = interview.run_turn(state, b"", [])     # 第 10 轮
+
+    assert result.fallback is False
+    assert result.answer == ""
 
 
 # ---------------------------------------------------------------- 判定与结束

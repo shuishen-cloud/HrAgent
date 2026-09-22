@@ -61,15 +61,53 @@
   }
   header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.2px; }
   header .sub { color: var(--muted); font-size: 12.5px; }
-  .mode {
+  /* 真实 / 模拟 切换 */
+  .modeswitch {
     margin-left: auto;
-    font-size: 12px;
-    padding: 4px 12px;
-    border-radius: 999px;
-    background: var(--warn-soft);
-    color: #92600a;
-    border: 1px solid #f5dfb8;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    background: #eef1f6;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+  }
+  .modeswitch button {
+    width: auto;
+    padding: 5px 13px;
+    font-size: 12.5px;
     font-weight: 500;
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    border-radius: 6px;
+    box-shadow: none;
+  }
+  .modeswitch button:hover:not(:disabled) { background: #e3e8f1; color: var(--text); }
+  .modeswitch button.on {
+    background: #fff;
+    color: var(--accent);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(16, 24, 40, .1);
+  }
+
+  /* 长按说话 */
+  button.hold {
+    margin-top: 14px;
+    padding: 15px;
+    font-size: 14.5px;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #4b79f7, #3260e8);
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;        /* 长按时不要触发页面滚动 / 缩放 */
+  }
+  button.hold.recording {
+    background: linear-gradient(180deg, #e05252, #c93b3b);
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(214, 69, 69, .16); }
+    50%      { box-shadow: 0 0 0 10px rgba(214, 69, 69, .04); }
   }
 
   /* ---------- 布局 ---------- */
@@ -121,7 +159,12 @@
     position: relative;
     border: 1px solid #1a2130;
   }
-  .camera img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .camera img, .camera video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .camera video { transform: scaleX(-1); }   /* 镜像，自拍视角更自然 */
   .camera .placeholder { color: #5b6678; font-size: 12.5px; }
   .camera .badge {
     position: absolute;
@@ -398,7 +441,10 @@
   <span class="logo">H</span>
   <h1>HrAgent</h1>
   <span class="sub">多模态 AI 面试官 · 看画面 + 听回答</span>
-  <span class="mode" id="modeBadge">模拟数据模式</span>
+  <div class="modeswitch" id="modeSwitch">
+    <button type="button" data-mode="real" class="on">真实设备</button>
+    <button type="button" data-mode="sim">模拟数据</button>
+  </div>
 </header>
 
 <main>
@@ -406,30 +452,38 @@
   <section class="panel">
     <h2>候选人画面</h2>
     <div class="camera">
-      <span class="badge">模拟</span>
+      <span class="badge" id="camBadge">模拟</span>
       <span class="placeholder" id="camPlaceholder">尚未开始</span>
       <img id="cam" alt="候选人画面" hidden>
+      <video id="camVideo" autoplay playsinline muted hidden></video>
     </div>
 
-    <label for="frameSel">模拟画面</label>
-    <select id="frameSel"></select>
+    <!-- 真实设备模式 -->
+    <div id="realControls" hidden>
+      <button id="holdBtn" class="hold" disabled>按住说话，松开发送</button>
+      <p class="hint">
+        按住时开始录音并持续抽帧，松开后一起发给面试官。<br>
+        没录到声音（或按得太短）会自动使用题库里的<strong>预设答案</strong>。
+      </p>
+    </div>
 
-    <label for="audioSel">模拟回答音频</label>
-    <select id="audioSel"></select>
+    <!-- 模拟数据模式 -->
+    <div id="simControls" hidden>
+      <label for="frameSel">模拟画面</label>
+      <select id="frameSel"></select>
+      <label for="audioSel">模拟回答音频</label>
+      <select id="audioSel"></select>
+    </div>
 
     <div class="row">
       <button id="startBtn">开始面试</button>
-      <button id="sendBtn" disabled>发送回答</button>
+      <button id="sendBtn" disabled hidden>发送回答</button>
     </div>
     <div class="row">
       <button id="reportBtn" class="ghost" disabled>查看报告</button>
     </div>
 
     <div class="status" id="status"></div>
-    <p class="hint">
-      当前为<strong>模拟数据模式</strong>：画面取自 fixture 图片，回答取自 fixture 音频。
-      接入真实摄像头 / 麦克风后，只需替换采集部分，发送链路不变。
-    </p>
   </section>
 
   <!-- 右：对话 -->
@@ -443,7 +497,9 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const cam = $("cam"), camPlaceholder = $("camPlaceholder");
+const cam = $("cam"), camPlaceholder = $("camPlaceholder"), camBadge = $("camBadge");
+const camVideo = $("camVideo"), holdBtn = $("holdBtn"), modeSwitch = $("modeSwitch");
+const realControls = $("realControls"), simControls = $("simControls");
 const frameSel = $("frameSel"), audioSel = $("audioSel");
 const startBtn = $("startBtn"), sendBtn = $("sendBtn"), reportBtn = $("reportBtn");
 const log = $("log"), statusEl = $("status");
@@ -451,6 +507,10 @@ const log = $("log"), statusEl = $("status");
 // 唯一的界面状态源。按钮可不可点一律由 refreshButtons() 派生，
 // 避免出现「某处禁用、另一处又启用」互相覆盖的情况（之前就是这么出的 bug）。
 const state = { started: false, finished: false, turns: 0, busy: false };
+
+// "real" = 真实摄像头/麦克风；"sim" = fixture 模拟素材。默认真实。
+let mode = "";
+let cameraReady = false;
 
 // ---------------------------------------------------------------- 工具
 
@@ -462,9 +522,13 @@ function setStatus(msg, isErr) {
 
 function refreshButtons() {
   const b = state.busy;
+  // 可以提交一轮的条件：已开始、未结束、当前没有请求在飞
+  const ready = state.started && !state.finished && !b;
+
   startBtn.disabled = b;
-  // 结束后不能再发；没开始也不能发
-  sendBtn.disabled = b || !state.started || state.finished;
+  // 真实模式用长按按钮；模拟模式用发送按钮
+  holdBtn.disabled = !ready || !cameraReady;
+  sendBtn.disabled = !ready;
   // 一轮都没答时后端会返回 409，所以直接禁用，别让用户点了才报错
   reportBtn.disabled = b || state.turns === 0;
   // 请求飞行中锁住下拉框：否则用户中途改选项，屏幕显示的帧和实际提交的帧会对不上
@@ -577,6 +641,152 @@ function showFrame(name) {
 
 frameSel.addEventListener("change", () => showFrame(frameSel.value));
 
+// ---------------------------------------------------------------- 真实设备采集
+
+const FRAME_INTERVAL_MS = 2000;   // 抽帧间隔，与后端 config.FRAME_INTERVAL_SEC 一致
+const MIN_HOLD_MS = 150;          // 比这更短的按动视为误触，不发送
+
+let mediaStream = null;      // getUserMedia 拿到的流
+let recorder = null;         // MediaRecorder
+let recChunks = [];          // 录音分片
+let capturedFrames = [];     // 抽到的帧 Blob
+let frameTimer = null;
+let holdFrom = 0;
+let capturing = false;
+const grabCanvas = document.createElement("canvas");
+
+async function openCamera() {
+  if (mediaStream) return true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus("此浏览器不支持摄像头采集（需要 https 或 localhost）", true);
+    return false;
+  }
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: true,
+    });
+  } catch (err) {
+    cameraReady = false;
+    setStatus("打不开摄像头/麦克风：" + err.message + " —— 可切到「模拟数据」继续", true);
+    return false;
+  }
+  camVideo.srcObject = mediaStream;
+  camVideo.hidden = false;
+  camPlaceholder.hidden = true;
+  cam.hidden = true;
+  cameraReady = true;
+  refreshButtons();
+  return true;
+}
+
+function closeCamera() {
+  if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((t) => t.stop());
+    mediaStream = null;
+  }
+  camVideo.srcObject = null;
+  camVideo.hidden = true;
+  cameraReady = false;
+}
+
+// 把 video 的当前画面画到 canvas 再导出 JPEG。
+// 这和真实摄像头取帧是同一套代码 —— 将来换成 MP4 文件或别的源，这里不用改。
+function grabFrame() {
+  if (!camVideo.videoWidth) return;
+  grabCanvas.width = camVideo.videoWidth;
+  grabCanvas.height = camVideo.videoHeight;
+  grabCanvas.getContext("2d").drawImage(camVideo, 0, 0);
+  grabCanvas.toBlob((b) => { if (b) capturedFrames.push(b); }, "image/jpeg", 0.85);
+}
+
+function startCapture() {
+  capturedFrames = [];
+  recChunks = [];
+  grabFrame();                                    // 先抓一帧，免得按得短就没画面
+  frameTimer = setInterval(grabFrame, FRAME_INTERVAL_MS);
+
+  const tracks = mediaStream ? mediaStream.getAudioTracks() : [];
+  if (!tracks.length) { setStatus("没有可用的麦克风", true); return false; }
+  recorder = new MediaRecorder(new MediaStream(tracks));
+  recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+  recorder.start();
+  return true;
+}
+
+// 停止录音，等最后一个分片到齐再返回完整音频
+function stopCapture() {
+  if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
+  return new Promise((resolve) => {
+    if (!recorder || recorder.state === "inactive") { resolve(new Blob([])); return; }
+    recorder.onstop = () => resolve(new Blob(recChunks, { type: recorder.mimeType || "audio/webm" }));
+    recorder.stop();
+  });
+}
+
+// ---- 长按：按住开始采集，松开停止并发送 ----
+
+async function onHoldStart(e) {
+  if (capturing || holdBtn.disabled) return;
+  e.preventDefault();
+  holdFrom = Date.now();
+  if (!startCapture()) return;
+  capturing = true;
+  holdBtn.classList.add("recording");
+  holdBtn.textContent = "松开即可发送…";
+  setStatus("正在录音并抽帧…");
+}
+
+async function onHoldEnd(e) {
+  if (!capturing) return;
+  e.preventDefault();
+  capturing = false;
+  holdBtn.classList.remove("recording");
+  holdBtn.textContent = "按住说话，松开发送";
+  refreshButtons();
+
+  const heldMs = Date.now() - holdFrom;
+  const audioBlob = await stopCapture();
+
+  if (heldMs < MIN_HOLD_MS) {          // 误触，不白吃一轮
+    setStatus("按得太短，没有发送。");
+    return;
+  }
+  // 录音为空 / 太短时后端转不出文字，会自动降级用题库预设答案
+  await sendTurn(audioBlob, capturedFrames.slice(), "真实设备");
+}
+
+// 用 pointer 事件：按住后手指/鼠标移出按钮再松开也能正确收到 up
+holdBtn.addEventListener("pointerdown", onHoldStart);
+document.addEventListener("pointerup", onHoldEnd);
+document.addEventListener("pointercancel", onHoldEnd);
+
+// ---------------------------------------------------------------- 模式切换
+
+async function setMode(next) {
+  if (next === mode) return;
+  mode = next;
+  modeSwitch.querySelectorAll("button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.mode === mode));
+
+  const isReal = mode === "real";
+  realControls.hidden = !isReal;
+  simControls.hidden = isReal;
+  sendBtn.hidden = isReal;
+  camBadge.textContent = isReal ? "实时" : "模拟";
+
+  if (isReal) {
+    cam.hidden = true;
+    await openCamera();
+  } else {
+    closeCamera();
+    cam.hidden = false;
+    if (frameSel.value) showFrame(frameSel.value);
+  }
+  refreshButtons();
+}
+
 // ---------------------------------------------------------------- 流程
 
 async function loadFixtures() {
@@ -591,6 +801,9 @@ async function loadFixtures() {
 async function startInterview() {
   // 后端 /api/start 会重置会话，已经答过就问一句，别把进度默默清掉
   if (state.turns > 0 && !confirm("重新开始会清空当前这场面试的记录，确定吗？")) return;
+
+  // 真实模式下先把设备准备好，免得开始后长按才发现没权限
+  if (mode === "real" && !cameraReady && !(await openCamera())) return;
 
   setBusy(true, "正在开始…");
   try {
@@ -611,22 +824,14 @@ async function startInterview() {
   }
 }
 
-async function sendAnswer() {
-  const frameName = frameSel.value;
-  const audioName = audioSel.value;
-  if (!frameName || !audioName) { setStatus("请先选择模拟画面和音频", true); return; }
-
+// 真实设备与模拟数据共用的发送路径：拿到「音频 Blob + 帧 Blob 数组」就发。
+// 两条路径的差别只在 Blob 从哪来，发送与渲染完全一致。
+async function sendTurn(audioBlob, frameBlobs, sourceLabel) {
   setBusy(true, "面试官正在看和听…（真实模型约需 10-20 秒）");
   try {
-    // 取模拟素材 —— 真实模式下这里换成 MediaRecorder 录出来的 Blob
-    const [audioBlob, frameBlob] = await Promise.all([
-      fetchBlob("/fixtures/audio/" + encodeURIComponent(audioName)),
-      fetchBlob("/fixtures/frames/" + encodeURIComponent(frameName)),
-    ]);
-
     const form = new FormData();
-    form.append("audio", audioBlob, audioName);
-    form.append("frames", frameBlob, frameName);
+    form.append("audio", audioBlob, "answer.webm");
+    frameBlobs.forEach((b, i) => form.append("frames", b, "frame_" + i + ".jpg"));
 
     const data = await api("/api/turn", { method: "POST", body: form });
     state.turns += 1;
@@ -635,10 +840,17 @@ async function sendAnswer() {
     tags.push(["得分 " + (data.score ?? "—"), ""]);
     tags.push([data.focused ? "专注" : "走神", data.focused ? "ok" : "warn"]);
     if (data.cheating) tags.push(["疑似作弊", "danger"]);
+    if (data.fallback) tags.push(["预设答案", "warn"]);
 
-    const box = addTurn("a", "候选人（语音转写）", data.answer || "（未识别到语音）", tags);
+    const box = addTurn("a", "候选人（" + sourceLabel + "）",
+                        data.answer || "（未识别到语音）", tags);
     if (data.comment) box.appendChild(el("div", "note", "点评：" + data.comment));
     if (data.attention_note) box.appendChild(el("div", "note", "画面：" + data.attention_note));
+    // fallback=true 表示这轮回答不是真的从录音转出来的，是题库预设答案顶上来的。
+    // 必须说清楚，否则会被当成候选人的真实回答。
+    if (data.fallback) {
+      box.appendChild(el("div", "note", "⚠️ 本轮没录到有效语音，已使用题库预设答案"));
+    }
     // parsed=false 表示模型没按约定格式返回，本轮走的是兜底问题。
     // 不说的话，用户会以为那句「能再展开说说吗」是模型真问的。
     if (data.parsed === false) {
@@ -652,7 +864,7 @@ async function sendAnswer() {
       state.finished = true;
       setStatus("面试已结束，可以查看报告了。");
     } else {
-      setStatus("已处理完这一轮，可以继续发送。");
+      setStatus("已处理完这一轮，可以继续。");
     }
   } catch (err) {
     setStatus("处理失败：" + err.message, true);
@@ -660,6 +872,28 @@ async function sendAnswer() {
     // 禁用状态一律交给 refreshButtons() 派生，这里只负责收尾
     setBusy(false);
   }
+}
+
+// 模拟模式：取 fixture 素材，组装成与真实录音同形的 Blob 再走同一条发送路径
+async function sendAnswer() {
+  const frameName = frameSel.value;
+  const audioName = audioSel.value;
+  if (!frameName || !audioName) { setStatus("请先选择模拟画面和音频", true); return; }
+  if (state.busy) return;
+
+  setBusy(true, "正在读取模拟素材…");
+  let audioBlob, frameBlob;
+  try {
+    [audioBlob, frameBlob] = await Promise.all([
+      fetchBlob("/fixtures/audio/" + encodeURIComponent(audioName)),
+      fetchBlob("/fixtures/frames/" + encodeURIComponent(frameName)),
+    ]);
+  } catch (err) {
+    setBusy(false);
+    setStatus("素材加载失败：" + err.message, true);
+    return;
+  }
+  await sendTurn(audioBlob, [frameBlob], "模拟数据");
 }
 
 // 分数分档 → 着色类名。阈值与后端 interview._recommend 的 8/6 保持一致，
@@ -743,6 +977,12 @@ startBtn.addEventListener("click", startInterview);
 sendBtn.addEventListener("click", sendAnswer);
 reportBtn.addEventListener("click", showReport);
 
+// 请求飞行中不让切模式，否则采集到一半把流关掉了
+modeSwitch.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-mode]");
+  if (btn && !state.busy) setMode(btn.dataset.mode);
+});
+
 // 报告容器需要在对话面板下方，动态插入
 (function mountReport() {
   const panel = document.createElement("div");
@@ -777,9 +1017,9 @@ async function init() {
     await loadFixtures();
   } catch (err) {
     setStatus("加载模拟素材失败：" + err.message, true);
-    return;
   }
   await restoreSession();
+  await setMode("real");          // 默认真实设备模式（会请求摄像头/麦克风权限）
   refreshButtons();
 }
 

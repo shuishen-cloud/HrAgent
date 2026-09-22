@@ -33,6 +33,7 @@ class TurnRecord:
     cheating: bool
     frames: int            # 本轮用了多少张画面帧
     next_question: str     # 本轮结束时面试官问的下一题
+    fallback: bool = False  # 回答是否来自题库预设（而非真实的语音转写）
 
 
 @dataclass
@@ -49,6 +50,7 @@ class TurnResult:
     audio: bytes           # 上面那句话的 TTS 音频
     finished: bool
     parsed: bool = True    # 本轮 LLM 是否按约定格式返回；False = 走了兜底
+    fallback: bool = False  # 回答是否来自题库预设（而非真实的语音转写）
 
 
 @dataclass
@@ -92,6 +94,24 @@ def _closing() -> str:
     return text if isinstance(text, str) and text.strip() else _FALLBACK_BANK["closing"]
 
 
+def preset_answer(turn_index: int) -> str:
+    """取题库里第 turn_index 题（1 起）的预设答案，没有就返回空串。
+
+    用途是降级：候选人没说出有效内容时（长按太短、麦克风没收到声音），
+    用预置的参考答案把这一轮补上，演示流程不至于断在这里。
+    """
+    questions = load_questions().get("questions")
+    if not isinstance(questions, list):
+        return ""
+    if not (1 <= turn_index <= len(questions)):
+        return ""
+    item = questions[turn_index - 1]
+    if not isinstance(item, dict):
+        return ""
+    answer = item.get("answer")
+    return answer.strip() if isinstance(answer, str) else ""
+
+
 def start(state: InterviewState) -> tuple[str, bytes]:
     """开场：给出第一个问题。返回 (问题文本, TTS 音频)。"""
     question = load_questions().get("opening")
@@ -115,22 +135,31 @@ def run_turn(state: InterviewState, audio_bytes: bytes = b"", frames: list[bytes
     # 1. 听：整段录音转文字
     answer = stt.transcribe(audio_bytes) if audio_bytes else ""
 
-    # 2. 看 + 想：文字 + 画面帧一起给多模态 LLM
+    # 2. 降级：没转出有效内容就用题库预设答案顶上。
+    #    「长按太短」和「没说话」的结果都是转出空串，物理上等价，一并处理。
+    #    按轮次对应题目：第 N 轮 → questions[N-1].answer
+    index = len(state.records) + 1
+    fallback = False
+    if not answer.strip():
+        preset = preset_answer(index)
+        if preset:
+            answer, fallback = preset, True
+
+    # 3. 看 + 想：文字 + 画面帧一起给多模态 LLM
     reply = llm.chat(state.history, answer, frames)
 
-    # 3. 先算出这一轮的结果，但**先别写进 state**
-    index = len(state.records) + 1
+    # 4. 先算出这一轮的结果，但**先别写进 state**
     finished = bool(reply["should_end"]) or index >= state.max_turns
     next_question = reply["next_question"]
     spoken = next_question if not finished else _closing()
 
-    # 4. 说：合成语音。这一步要联网，是最容易失败的一环，
+    # 5. 说：合成语音。这一步要联网，是最容易失败的一环，
     #    所以放在提交状态之前 —— 失败时 state 保持原样，用户重试仍是同一轮；
     #    否则这一轮已经记进 records，重试会变成两轮，
     #    而且报告里那轮的「问题」是从没被念出来过的那句，问与答对不上。
     audio = tts.synthesize(spoken)
 
-    # 5. 全部成功，提交状态
+    # 6. 全部成功，提交状态
     record = TurnRecord(
         index=index,
         question=state.current_question,
@@ -142,6 +171,7 @@ def run_turn(state: InterviewState, audio_bytes: bytes = b"", frames: list[bytes
         cheating=reply["cheating_suspected"],
         frames=len(frames),
         next_question=next_question,
+        fallback=fallback,
     )
     state.records.append(record)
     # 历史只留文字，不带图片
@@ -161,6 +191,7 @@ def run_turn(state: InterviewState, audio_bytes: bytes = b"", frames: list[bytes
         audio=audio,
         finished=finished,
         parsed=reply.get("_parsed", True),
+        fallback=fallback,
     )
 
 
@@ -198,6 +229,7 @@ def build_report(state: InterviewState) -> dict:
                 "attention_note": r.attention_note,
                 "cheating": r.cheating,
                 "frames": r.frames,
+                "fallback": r.fallback,
             }
             for r in records
         ],
@@ -253,6 +285,8 @@ def render_markdown(state: InterviewState, report: dict | None = None, summary: 
         parts.append("专注" if r["focused"] else "⚠️ 走神")
         if r["cheating"]:
             parts.append("⚠️ 疑似作弊")
+        if r.get("fallback"):
+            parts.append("预设答案")
         lines.append("- " + " · ".join(parts))
 
     return "\n".join(lines) + "\n"
