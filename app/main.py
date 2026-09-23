@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, interview
+from . import config, interview, resume as resume_parser
 
 logger = logging.getLogger("hragent")
 
@@ -37,6 +37,10 @@ class Session:
         self.lock = threading.Lock()   # 引擎跑得慢，防止两次请求交叉改同一份 state
         self.state = interview.InterviewState()
         self.started = False
+        # 候选人简历。**故意不随 reset 清空** —— 重开一场面试
+        # 还是同一位候选人，简历不该让用户重传一遍
+        self.resume = ""
+        self.resume_name = ""
 
     def reset(self) -> None:
         with self.lock:
@@ -99,7 +103,56 @@ def status() -> dict:
             "turns": len(session.state.records),
             "finished": session.state.finished,
             "max_turns": session.state.max_turns,
+            "resume_loaded": bool(session.resume),
+            "resume_chars": len(session.resume),
         }
+
+
+# ---------------------------------------------------------------- 简历
+
+@app.post("/api/resume")
+def upload_resume(
+    file: Annotated[UploadFile, File(description="简历文件（pdf/docx/txt/md）")],
+) -> dict:
+    """上传并解析简历。解析失败返回 400 + 可直接展示给用户的原因。"""
+    file.file.seek(0)
+    data = file.file.read()
+    try:
+        text = resume_parser.extract_text(file.filename or "", data)
+    except resume_parser.ResumeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    with session.lock:
+        session.resume = text
+        session.resume_name = file.filename or "简历"
+
+    return {
+        "loaded": True,
+        "filename": session.resume_name,
+        "chars": len(text),
+        "preview": resume_parser.summarize(text, 160),
+    }
+
+
+@app.get("/api/resume")
+def get_resume() -> dict:
+    with session.lock:
+        text = session.resume
+    return {
+        "loaded": bool(text),
+        "filename": session.resume_name if text else "",
+        "chars": len(text),
+        "preview": resume_parser.summarize(text, 160) if text else "",
+    }
+
+
+@app.delete("/api/resume")
+def clear_resume() -> dict:
+    """清掉简历，回到固定题库模式。"""
+    with session.lock:
+        session.resume = ""
+        session.resume_name = ""
+    return {"loaded": False, "filename": "", "chars": 0, "preview": ""}
 
 
 @app.post("/api/start")
@@ -113,11 +166,16 @@ def start() -> dict:
     session.reset()
     try:
         with session.lock:
-            question, audio = interview.start(session.state)
+            # 有简历就在 start 内部由 LLM 按简历生成开场问题
+            question, audio = interview.start(session.state, session.resume)
             session.started = True
     except Exception as exc:
         raise _fail(exc, "开始面试") from exc
-    return {"question": question, "audio": _b64(audio)}
+    return {
+        "question": question,
+        "audio": _b64(audio),
+        "resume_used": bool(session.resume),
+    }
 
 
 @app.post("/api/turn")

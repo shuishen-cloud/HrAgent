@@ -45,6 +45,44 @@ DEFAULT_SYSTEM_PROMPT = """你是一位专业、友好的中文面试官，正�
 """
 
 
+# 有简历时追加到系统提示后面，让面试官围绕简历提问而不是念题库
+RESUME_INSTRUCTIONS = """本次面试有候选人简历，内容如下：
+
+<简历>
+{resume}
+</简历>
+
+提问要求：
+- **围绕这份简历提问**，优先深挖里面写到的项目、技术选型、职责和成果
+- 简历里含糊、可疑或值得追问的地方，要顺着问下去（比如只写了「负责优化」却没说
+  优化了什么、效果如何）
+- 简历里没写但岗位关心的能力，也要覆盖到
+- 不要问简历里已经写得很清楚的事实性问题（如「你是哪个学校的」）
+- 每次只问一个问题，口语化，像真人面试官说话
+"""
+
+# 只在「没有简历」时用的开场话术，有简历时开场问题由 LLM 生成
+OPENING_SYSTEM_PROMPT = """你是一位专业、友好的中文面试官，马上要开始一场视频面试。
+
+你会收到候选人的简历。请基于简历内容，说一段**开场白并抛出第一个问题**：
+- 先简短寒暄（一句话即可），然后直接问
+- 第一个问题要针对简历里最值得深挖的点（通常是最近的项目或最核心的经历）
+- 口语化、自然，像真人面试官开口说话，不要写成书面语
+- 只输出这段话本身，不要任何前缀、引号或解释
+"""
+
+# 简历模式下 STT 失败时，让 LLM 就当前问题生成一段「候选人视角」的回答
+SAMPLE_ANSWER_SYSTEM_PROMPT = """你在帮一位候选人准备面试。请针对面试官的问题，
+写一段**候选人视角的口语化回答**，用于演示。
+
+要求：
+- 直接说答案，不要「好的，我认为」这类铺垫
+- 控制在 80 字以内，口语化，像真人在说话
+- 内容要合理可信，不要空话套话
+- 只输出回答本身，不要任何前缀或解释
+"""
+
+
 def _image_part(frame: bytes, mime: str = "image/jpeg") -> dict:
     """把一帧图片字节包装成 OpenAI 兼容的 image_url 结构。"""
     b64 = base64.b64encode(frame).decode("ascii")
@@ -230,6 +268,42 @@ def _get_client():
     if config.LLM_BASE_URL:
         kwargs["base_url"] = config.LLM_BASE_URL
     return OpenAI(**kwargs)
+
+
+def system_prompt_for(resume: str = "") -> str:
+    """有简历就把简历并进系统提示，让面试官围绕它提问。
+
+    注意：简历会进入**每一轮**请求，输入 token 会明显变大（一份 4000 字简历
+    约合 2000+ token）。所以 config.RESUME_MAX_CHARS 做了截断。
+    """
+    resume = (resume or "").strip()
+    if not resume:
+        return DEFAULT_SYSTEM_PROMPT
+    return DEFAULT_SYSTEM_PROMPT + "\n\n" + RESUME_INSTRUCTIONS.format(resume=resume)
+
+
+def _plain_completion(system: str, user: str, temperature: float = 0.8) -> str:
+    """要一段纯文本（不是 JSON）时的调用。失败抛异常，由上层兜底。"""
+    client = _get_client()
+    resp = client.chat.completions.create(
+        model=config.LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=temperature,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
+def opening_question(resume: str) -> str:
+    """基于简历生成开场白 + 第一个问题。"""
+    return _plain_completion(OPENING_SYSTEM_PROMPT, f"候选人简历：\n\n{resume}")
+
+
+def sample_answer(question: str) -> str:
+    """就某个问题生成一段候选人视角的回答（STT 失败时的降级素材）。"""
+    return _plain_completion(SAMPLE_ANSWER_SYSTEM_PROMPT, f"面试官的问题是：{question}")
 
 
 def chat(

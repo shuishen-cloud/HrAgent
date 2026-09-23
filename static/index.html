@@ -248,6 +248,69 @@
     max-width: 1320px;
     margin: 0 auto;
   }
+  /* 左栏：简历 + 画面 两个面板竖着排。包一层是为了让 grid 仍只有两列，
+     右栏的「等高」逻辑（.panel-chat 拉伸到左栏高度）不受影响 */
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;          /* 允许被 grid 压窄，否则长文本会撑破列宽 */
+  }
+
+  /* ---------- 简历上传 ---------- */
+  .drop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    padding: 18px 12px;
+    text-align: center;
+    border: 1.5px dashed var(--line);
+    border-radius: 10px;
+    background: var(--panel-2, rgba(255, 255, 255, .02));
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+  }
+  .drop:hover, .drop.over {
+    border-color: var(--accent);
+    color: var(--text);
+    background: var(--accent-soft);
+  }
+  .drop .ico { width: 20px; height: 20px; opacity: .7; }
+  .drop-sub { font-size: 11px; color: var(--muted-2, var(--muted)); }
+
+  .resume-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .resume-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .resume-chars { font-size: 11px; color: var(--muted); flex: none; }
+  .resume-preview {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.55;
+    max-height: 88px;
+    overflow-y: auto;
+    padding: 8px 10px;
+    border-radius: 7px;
+    background: var(--panel-2, rgba(255, 255, 255, .03));
+    border: 1px solid var(--line);
+    margin-bottom: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
 
   .panel {
     background: var(--panel);
@@ -751,7 +814,34 @@
 </header>
 
 <main>
-  <!-- 左：画面 + 控制 -->
+  <!-- 左栏：简历 + 画面控制 -->
+  <div class="col">
+
+  <!-- 简历 -->
+  <section class="panel">
+    <h2>候选人简历</h2>
+    <label class="drop" id="resumeDrop" for="resumeFile">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <span id="resumeDropText">点击选择简历，或拖到这里</span>
+      <span class="drop-sub">支持 PDF / Word / txt / md</span>
+      <input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md" hidden>
+    </label>
+
+    <div id="resumeInfo" hidden>
+      <div class="resume-head">
+        <span class="resume-name" id="resumeName"></span>
+        <span class="resume-chars" id="resumeChars"></span>
+      </div>
+      <div class="resume-preview" id="resumePreview"></div>
+      <button id="resumeClear" class="ghost">移除简历（回到固定题库）</button>
+    </div>
+
+    <p class="hint" id="resumeHint">
+      上传简历后，面试官会<strong>围绕简历内容提问</strong>（深挖项目与技术细节）；
+      不上传则走内置固定题库。
+    </p>
+  </section>
+
   <section class="panel">
     <h2>候选人画面</h2>
     <div class="camera" id="cameraBox">
@@ -797,6 +887,8 @@
 
     <div class="status" id="status"></div>
   </section>
+
+  </div><!-- /左栏 -->
 
   <!-- 右：对话 -->
   <section class="panel panel-chat">
@@ -1183,6 +1275,97 @@ holdBtn.addEventListener("click", () => {
   else startRecording();
 });
 
+// ---------------------------------------------------------------- 简历
+
+const resumeDrop = $("resumeDrop"), resumeFile = $("resumeFile");
+const resumeDropText = $("resumeDropText");
+const resumeInfo = $("resumeInfo"), resumeName = $("resumeName");
+const resumeChars = $("resumeChars"), resumePreview = $("resumePreview");
+const resumeClear = $("resumeClear"), resumeHint = $("resumeHint");
+
+const RESUME_HINT_OFF =
+  "上传简历后，面试官会<strong>围绕简历内容提问</strong>（深挖项目与技术细节）；" +
+  "不上传则走内置固定题库。";
+const RESUME_HINT_ON =
+  "面试官会<strong>围绕这份简历提问</strong>。想换回固定题库就点「移除简历」。";
+
+function renderResume(data) {
+  if (data && data.loaded) {
+    resumeDrop.hidden = true;
+    resumeInfo.hidden = false;
+    resumeName.textContent = data.filename || "已上传的简历";
+    resumeChars.textContent = data.chars + " 字";
+    resumePreview.textContent = data.preview || "";
+    resumeHint.innerHTML = RESUME_HINT_ON;
+  } else {
+    resumeInfo.hidden = true;
+    resumeDrop.hidden = false;
+    resumeDropText.textContent = "点击选择简历，或拖到这里";
+    resumeHint.innerHTML = RESUME_HINT_OFF;
+  }
+}
+
+async function uploadResume(file) {
+  if (!file || state.busy) return;
+  setBusy(true, "正在解析简历…");
+  try {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    // 不走 api()：它默认按 JSON 解析响应，这里成功/失败都是 JSON，
+    // 但上传走的是 multipart，单独处理更直白
+    const res = await fetch("/api/resume", { method: "POST", body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || (res.status + " " + res.statusText));
+
+    renderResume(data);
+    setStatus("简历已解析（" + data.chars + " 字）。开始面试后面试官会围绕它提问。");
+  } catch (err) {
+    setStatus("简历上传失败：" + err.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function clearResume() {
+  if (state.busy) return;
+  try {
+    renderResume(await api("/api/resume", { method: "DELETE" }));
+    setStatus("已移除简历，回到固定题库模式。");
+  } catch (err) {
+    setStatus("移除简历失败：" + err.message, true);
+  }
+}
+
+async function loadResume() {
+  try {
+    renderResume(await api("/api/resume", {}, 10000));
+  } catch (err) {
+    /* 后端没起来也不该阻塞页面 */
+  }
+}
+
+resumeFile.addEventListener("change", () => {
+  uploadResume(resumeFile.files[0]);
+  resumeFile.value = "";            // 清空才能重复选同一个文件
+});
+resumeClear.addEventListener("click", clearResume);
+
+// 拖拽上传。点击选文件由 <label for> 原生处理，这里只管拖放
+["dragenter", "dragover"].forEach((ev) =>
+  resumeDrop.addEventListener(ev, (e) => {
+    e.preventDefault();
+    resumeDrop.classList.add("over");
+  }));
+["dragleave", "drop"].forEach((ev) =>
+  resumeDrop.addEventListener(ev, (e) => {
+    e.preventDefault();
+    resumeDrop.classList.remove("over");
+  }));
+resumeDrop.addEventListener("drop", (e) => {
+  const f = e.dataTransfer?.files?.[0];
+  if (f) uploadResume(f);
+});
+
 // ---------------------------------------------------------------- 模式切换
 
 async function setMode(next) {
@@ -1486,6 +1669,7 @@ async function init() {
   } catch (err) {
     setStatus("加载模拟素材失败：" + err.message, true);
   }
+  await loadResume();             // 刷新后恢复已上传的简历
   await restoreSession();
   await setMode("real");          // 默认真实设备模式（会请求摄像头/麦克风权限）
   refreshButtons();

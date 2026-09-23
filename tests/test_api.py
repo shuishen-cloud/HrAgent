@@ -17,9 +17,17 @@ from app import interview, main
 def client(monkeypatch):
     """每个用例都从干净的会话开始。"""
     main.session.reset()
+    # reset() 故意不清简历（重开一场面试还是同一位候选人），
+    # 所以测试之间必须显式清掉，否则简历会泄漏到后续用例
+    main.session.resume = ""
     monkeypatch.setattr(interview.tts, "synthesize", lambda text, voice=None: b"MP3")
+    # start() 在「有简历」时会调 LLM 生成开场问题，这里必须打桩 ——
+    # 否则相关用例会真的走网络（表现：整个测试文件从 0.3s 变成 5s）
+    monkeypatch.setattr(interview.llm, "opening_question", lambda resume: "请自我介绍")
+    monkeypatch.setattr(interview.llm, "sample_answer", lambda q: "这是示例回答")
 
-    def fake_start(state):
+    def fake_start(state, resume=""):
+        state.resume = resume or ""
         state.current_question = "请自我介绍"
         state.history = [{"role": "assistant", "content": "请自我介绍"}]
         state.finished = False
@@ -172,7 +180,7 @@ def test_引擎报错时返回可读信息而不是500堆栈(client, monkeypatch
 def test_开始接口出错也返回可读信息(client, monkeypatch):
     """开场语音合成失败时不能是裸 500 —— 前端只能显示 "500 Internal Server Error"，
     用户根本看不出是 TTS 的问题。"""
-    def boom(state):
+    def boom(state, resume=""):
         raise RuntimeError("edge-tts 连接被重置")
 
     monkeypatch.setattr(interview, "start", boom)
@@ -214,6 +222,88 @@ def test_没有记录时不给报告(client):
     assert res.status_code == 409
 
 
+# ---------------------------------------------------------------- 简历
+
+# 必须够长：短于 config.RESUME_MIN_CHARS 会被解析器判为「没解析出有效文字」
+# （那个阈值是用来识别扫描件的，不是用来卡正常简历的）
+RESUME_BODY = """张伟
+求职意向：后端开发工程师    电话：138-0000-0000
+教育经历：太原工业学院 软件工程 本科 2019-2023
+项目经历：西瓜甜度机器视觉检测 2022.03-2022.10
+  负责图像预处理与模型推理，用 OpenCV 去噪与轮廓提取，轻量 CNN 预测甜度
+技能：Python / OpenCV / MySQL / Git
+"""
+
+
+def test_没上传简历时状态显示未加载(client):
+    data = client.get("/api/status").json()
+    assert data["resume_loaded"] is False
+    assert data["resume_chars"] == 0
+
+
+def test_上传简历后返回预览(client):
+    res = client.post(
+        "/api/resume",
+        files={"file": ("简历.txt", io.BytesIO(RESUME_BODY.encode("utf-8")), "text/plain")},
+    )
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["filename"] == "简历.txt"
+    assert data["chars"] > 20
+    assert "张伟" in data["preview"]
+
+    assert client.get("/api/status").json()["resume_loaded"] is True
+
+
+def test_简历解析失败返回可读的_400(client):
+    res = client.post(
+        "/api/resume",
+        files={"file": ("照片.png", io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"x" * 50), "image/png")},
+    )
+
+    assert res.status_code == 400
+    assert "不支持" in res.json()["detail"]
+
+
+def test_可以清掉简历回到题库模式(client):
+    client.post(
+        "/api/resume",
+        files={"file": ("a.txt", io.BytesIO(RESUME_BODY.encode("utf-8")), "text/plain")},
+    )
+    assert client.get("/api/status").json()["resume_loaded"] is True
+
+    assert client.delete("/api/resume").json()["loaded"] is False
+    assert client.get("/api/status").json()["resume_loaded"] is False
+
+
+def test_开始面试会把简历传给引擎(client, monkeypatch):
+    """验证简历确实流到了 interview.start，而不是只存着没用。"""
+    seen = {}
+    original = interview.start
+
+    def spy(state, resume=""):
+        seen["resume"] = resume
+        return original(state, resume)
+
+    monkeypatch.setattr(interview, "start", spy)
+    client.post("/api/resume",
+                files={"file": ("a.txt", io.BytesIO(RESUME_BODY.encode("utf-8")), "text/plain")})
+    client.post("/api/start")
+
+    assert "张伟" in seen["resume"]
+
+
+def test_重开面试不会把简历清掉(client):
+    """简历属于候选人，不属于某一场面试，重开不该让用户重传。"""
+    client.post("/api/resume",
+                files={"file": ("a.txt", io.BytesIO(RESUME_BODY.encode("utf-8")), "text/plain")})
+    client.post("/api/start")
+    client.post("/api/start")          # 重开
+
+    assert client.get("/api/status").json()["resume_loaded"] is True
+
+
 def test_报告包含汇总和_markdown(client):
     client.post("/api/start")
     _answer(client, frames=["focused_01.jpg"])
@@ -239,6 +329,7 @@ def real_engine_client(monkeypatch):
     这里故意不打桩 tts.synthesize —— 让它真的执行 asyncio.run()。
     """
     main.session.reset()
+    main.session.resume = ""     # 同上：简历不在 reset 范围内，得显式清
 
     async def _fake_stream(text, voice):
         return b"MP3"          # 内部桩掉，避免真的联网调 edge-tts

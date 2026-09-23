@@ -13,6 +13,13 @@ edge-tts>=7.0.0
 # OpenAI 兼容 SDK：官方留空 LLM_BASE_URL；国内换 DashScope 兼容模式地址即可
 openai>=1.55
 
+# ---- 简历解析 ----
+# PDF 用 pypdfium2（PDFium，Chrome 的 PDF 引擎）。
+# **不要换成 pypdf**：上传的文件其实不是 PDF 时，pypdf 会间歇性段错误
+# 把整个进程打掉（实测非 PDF 样本 8/8 崩），而这是用户上传路径。
+pypdfium2>=5.0
+python-docx>=1.1      # .docx
+
 # ---- 测试 ----
 pytest>=8.3
 pillow>=11.0          # 仅用于生成/处理 tests/fixtures 下的样本图

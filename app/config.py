@@ -78,6 +78,11 @@ TTS_TIMEOUT = float(os.getenv("TTS_TIMEOUT", "30"))
 MAX_TURNS = int(os.getenv("MAX_TURNS", "5"))          # 最多几轮问答
 FRAME_INTERVAL_SEC = float(os.getenv("FRAME_INTERVAL_SEC", "2.0"))  # 前端抽帧间隔
 
+# ---- 简历 ----
+RESUME_MAX_BYTES = int(os.getenv("RESUME_MAX_BYTES", str(10 * 1024 * 1024)))   # 上传上限 10MB
+RESUME_MAX_CHARS = int(os.getenv("RESUME_MAX_CHARS", "4000"))  # 截断长度，控制 LLM 上下文
+RESUME_MIN_CHARS = int(os.getenv("RESUME_MIN_CHARS", "30"))    # 少于这么多字视为没解析出内容
+
 
 def describe_llm() -> str:
     """给日志/冒烟测试用的一句话描述，注意别把 key 打出来。"""

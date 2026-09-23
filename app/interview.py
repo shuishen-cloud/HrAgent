@@ -13,10 +13,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from . import config, llm, stt, tts
+
+logger = logging.getLogger("hragent")
 
 
 @dataclass
@@ -60,6 +63,8 @@ class InterviewState:
     max_turns: int = 0
     current_question: str = ""
     finished: bool = False
+    # 候选人简历纯文本。有值时问题由 LLM 围绕简历生成，而不是走固定题库
+    resume: str = ""
 
     def __post_init__(self) -> None:
         if not self.max_turns:
@@ -112,11 +117,44 @@ def preset_answer(turn_index: int) -> str:
     return answer.strip() if isinstance(answer, str) else ""
 
 
-def start(state: InterviewState) -> tuple[str, bytes]:
-    """开场：给出第一个问题。返回 (问题文本, TTS 音频)。"""
-    question = load_questions().get("opening")
-    if not isinstance(question, str) or not question.strip():
-        question = _FALLBACK_BANK["opening"]
+def _fallback_answer(state: InterviewState, turn_index: int) -> str:
+    """STT 没转出内容时，用什么顶上。
+
+    简历模式下问题是 LLM 现生成的，固定题库里的预设答案**对不上题**，
+    所以改为让 LLM 就当前问题生成一段候选人视角的回答。
+    生成失败再退回题库预设，实在没有就返回空（保持原行为）。
+    """
+    if state.resume and state.current_question:
+        try:
+            generated = llm.sample_answer(state.current_question)
+            if generated:
+                return generated
+        except Exception:
+            logger.exception("按当前问题生成示例回答失败，退回题库预设")
+    return preset_answer(turn_index)
+
+
+def start(state: InterviewState, resume: str = "") -> tuple[str, bytes]:
+    """开场：给出第一个问题。返回 (问题文本, TTS 音频)。
+
+    有简历时，开场问题由 LLM 基于简历生成；生成失败则退回题库开场白 ——
+    不能让一次 LLM 抖动就把整场面试卡在开始。
+    """
+    state.resume = (resume or "").strip()
+
+    question = ""
+    if state.resume:
+        try:
+            question = llm.opening_question(state.resume)
+        except Exception:
+            logger.exception("按简历生成开场问题失败，退回题库开场白")
+        if not question:
+            question = ""
+
+    if not question:
+        fallback = load_questions().get("opening")
+        question = fallback if isinstance(fallback, str) and fallback.strip() \
+            else _FALLBACK_BANK["opening"]
 
     # 同 run_turn：先做最容易失败的一步（TTS 要联网），成功了再改 state，
     # 免得合成失败后 state 停在半路、用户反复点开始却只看到 500
@@ -141,12 +179,13 @@ def run_turn(state: InterviewState, audio_bytes: bytes = b"", frames: list[bytes
     index = len(state.records) + 1
     fallback = False
     if not answer.strip():
-        preset = preset_answer(index)
+        preset = _fallback_answer(state, index)
         if preset:
             answer, fallback = preset, True
 
-    # 3. 看 + 想：文字 + 画面帧一起给多模态 LLM
-    reply = llm.chat(state.history, answer, frames)
+    # 3. 看 + 想：文字 + 画面帧 + （有简历的话）简历，一起给多模态 LLM
+    reply = llm.chat(state.history, answer, frames,
+                     system=llm.system_prompt_for(state.resume))
 
     # 4. 先算出这一轮的结果，但**先别写进 state**
     finished = bool(reply["should_end"]) or index >= state.max_turns
