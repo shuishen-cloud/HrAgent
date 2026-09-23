@@ -1073,6 +1073,25 @@ function playB64(b64) {
   }
 }
 
+// 把面试官这句话念出来。
+// 单独走后端 /api/tts，**不阻塞文字显示** —— 合成要 1-2 秒，
+// 如果塞在 /api/start 或 /api/turn 的响应里，用户得白等这段时间才看到文字。
+async function speak(text) {
+  const t = (text || "").trim();
+  if (!t) return;
+  try {
+    const data = await api("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: t }),
+    }, 60000);
+    playB64(data.audio);
+  } catch (err) {
+    // 播报失败不该让人以为整轮失败了，文字已经显示出来了
+    setStatus("语音播报失败：" + err.message + "（文字已正常显示）", true);
+  }
+}
+
 // 统一的请求封装：带超时，避免后端卡住时按钮被永久锁死
 async function api(path, opts = {}, timeoutMs = 180000) {
   const ctrl = new AbortController();
@@ -1423,7 +1442,7 @@ async function startInterview() {
     log.innerHTML = "";
     stopAudio();
     addTurn("q", "面试官", data.question);
-    playB64(data.audio);
+    speak(data.question);          // 不 await：文字已经显示了，语音随后到
     $("report").style.display = "none";
     setStatus("面试已开始，选好模拟画面和回答音频后点「发送回答」。");
   } catch (err) {
@@ -1471,7 +1490,7 @@ async function sendTurn(audioBlob, frameBlobs, sourceLabel) {
     appendComment(data.comment, data.attention_note);
 
     addTurn("q", "面试官", data.question);
-    playB64(data.audio);
+    speak(data.question);          // 不 await：文字已经显示了，语音随后到
 
     if (data.finished) {
       state.finished = true;

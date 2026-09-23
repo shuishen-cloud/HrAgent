@@ -59,9 +59,13 @@ STT_INITIAL_PROMPT = os.getenv("STT_INITIAL_PROMPT", "以下是普通话的面�
 # 短于这个秒数的录音不送进模型 —— 音频太短时 Whisper 会把 initial_prompt
 # 原样吐回来（实测 0.3 秒音频 → "请用简体中文转写。"），比空串更隐蔽
 STT_MIN_SECONDS = float(os.getenv("STT_MIN_SECONDS", "0.8"))
-# ctranslate2 在本机 CPU 上多线程会内存崩溃（corrupted double-linked list），
-# 固定单线程换稳定。机器上跑得动的话可以调大，例如 STT_CPU_THREADS=4
-STT_CPU_THREADS = int(os.getenv("STT_CPU_THREADS", "1"))
+# ctranslate2 在**默认线程数（=CPU 核数）**下会内存崩溃
+# （corrupted double-linked list）。实测本机 32 核、默认 32 线程必崩。
+# 但固定 1 线程又太浪费 —— benchmark（2 秒样本，small 模型）：
+#   1 线程 3.22s / 4 线程 1.29s / 8 线程 1.28s / 16 线程 1.21s
+# 即 **4 线程已吃满收益（约 2.5x）**，再往上没有额外好处。
+# 所以取 4：拿满提速，又远离会崩的高线程区。
+STT_CPU_THREADS = int(os.getenv("STT_CPU_THREADS", "4"))
 
 # ---- HuggingFace（只影响首次下载 Whisper 模型）----
 # 国内直连 huggingface.co 不通，且是「挂起」不是「快速失败」，
@@ -73,6 +77,8 @@ HF_ENDPOINT = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
 TTS_VOICE = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 # 合成超时。没有它的话，edge-tts 挂起会让持锁的整轮请求永不返回
 TTS_TIMEOUT = float(os.getenv("TTS_TIMEOUT", "30"))
+# 单次合成的文字上限，防止有人拿 /api/tts 合成超长文本
+TTS_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "500"))
 
 # ---- 面试流程 ----
 MAX_TURNS = int(os.getenv("MAX_TURNS", "5"))          # 最多几轮问答

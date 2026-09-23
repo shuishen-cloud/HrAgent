@@ -62,12 +62,12 @@ def _run(state, monkeypatch, frames=("focused_01.jpg",), audio=b"x" * 100):
 
 # ---------------------------------------------------------------- 开场
 
-def test_start_返回开场问题并合成语音(pipeline):
+def test_start_返回开场问题(pipeline):
+    """start 只回文字，不回语音 —— 语音由前端异步请求 /api/tts。"""
     state = interview.InterviewState()
-    question, audio = interview.start(state)
+    question = interview.start(state)
 
     assert "自我介绍" in question
-    assert audio == b"AUDIO"
     # 开场问题要进历史，否则 LLM 不知道面试官问过什么
     assert state.history == [{"role": "assistant", "content": question}]
     assert state.current_question == question
@@ -84,7 +84,6 @@ def test_run_turn_完整走一遍(pipeline):
     assert result.answer == "这是第 100 字节的转写"   # 听
     assert result.score == 7                          # 想
     assert result.question == "追问 1？"               # 说
-    assert result.audio == b"AUDIO"
     assert result.finished is False
     assert len(state.records) == 1
     assert state.records[0].question == state.history[0]["content"]
@@ -366,22 +365,27 @@ def test_疑似作弊时结论要求人工复核():
 # 否则这一轮已经记进 records，用户重试会变成两轮，而且报告里那轮的
 # 「问题」是从没被念出来过的那句，问与答对不上。
 
-def test_tts_失败时这一轮不会被记进_state(monkeypatch, pipeline):
+def test_run_turn_不再调用_TTS(monkeypatch, pipeline):
+    """架构守卫：TTS 已拆到独立的 /api/tts。
+
+    以前 TTS 在 run_turn 里，它失败（要联网，是最容易挂的一环）会造成
+    「这一轮已记进 state 但接口报错」，用户重试就变成两轮，且报告里那轮的
+    「问题」从没被念出来过。拆走之后这个失败模式被结构性消除了。
+
+    若有人再把 TTS 塞回主链路，文字显示又会被语音合成阻塞（白等 1-2 秒），
+    这条测试会立刻失败。
+    """
     state = interview.InterviewState()
     interview.start(state)
-    history_before = list(state.history)
 
     def boom(text, voice=None):
-        raise RuntimeError("edge-tts 挂了")
+        raise AssertionError("run_turn 不该调用 TTS")
 
     monkeypatch.setattr(tts, "synthesize", boom)
-    with pytest.raises(RuntimeError):
-        interview.run_turn(state, b"audio", [_frame("focused_01.jpg")])
+    result = interview.run_turn(state, b"audio", [_frame("focused_01.jpg")])
 
-    assert state.records == []                  # 没记
-    assert state.history == history_before      # 历史没推进
-    assert state.finished is False
-    assert len(state.records) == 0
+    assert len(state.records) == 1
+    assert result.question
 
 
 def test_llm_失败时也不会留下半轮记录(monkeypatch, pipeline):
@@ -399,27 +403,13 @@ def test_llm_失败时也不会留下半轮记录(monkeypatch, pipeline):
     assert len(state.history) == 1     # 只剩开场那句
 
 
-def test_tts_失败后重试仍算同一轮(monkeypatch, pipeline):
-    """失败一次、成功一次之后，应该只有 1 条记录，不是 2 条。"""
-    state = interview.InterviewState()
-    interview.start(state)
+def test_start_也不调用_TTS(monkeypatch, pipeline):
+    """同上，开场也不该合成语音。"""
+    def boom(text, voice=None):
+        raise AssertionError("start 不该调用 TTS")
 
-    calls = {"n": 0}
-    real = tts.synthesize
-
-    def flaky(text, voice=None):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("第一次失败")
-        return b"MP3"
-
-    monkeypatch.setattr(tts, "synthesize", flaky)
-    with pytest.raises(RuntimeError):
-        interview.run_turn(state, b"audio", [_frame("focused_01.jpg")])
-    result = interview.run_turn(state, b"audio", [_frame("focused_01.jpg")])
-
-    assert len(state.records) == 1
-    assert result.question          # 正常返回
+    monkeypatch.setattr(tts, "synthesize", boom)
+    assert interview.start(interview.InterviewState())
 
 
 # ---------------------------------------------------------------- 题库容错
@@ -440,9 +430,8 @@ def test_题库内容异常都能开局(monkeypatch, tmp_path, content):
     (tmp_path / "questions.json").write_text(content, encoding="utf-8")
     monkeypatch.setattr(interview.config, "DATA_DIR", tmp_path)
 
-    question, audio = interview.start(interview.InterviewState())
+    question = interview.start(interview.InterviewState())
     assert question.strip()      # 有开场白
-    assert audio                 # 有语音
 
 
 def test_题库缺_closing_时结束语不为空(monkeypatch, tmp_path):
@@ -457,4 +446,3 @@ def test_题库缺_closing_时结束语不为空(monkeypatch, tmp_path):
 
     assert result.finished is True
     assert result.question.strip()          # 不是空串
-    assert result.audio                     # 不是空音频

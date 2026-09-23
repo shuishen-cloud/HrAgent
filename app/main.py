@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, interview, resume as resume_parser
+from . import config, interview, resume as resume_parser, tts
 
 logger = logging.getLogger("hragent")
 
@@ -167,15 +167,35 @@ def start() -> dict:
     try:
         with session.lock:
             # 有简历就在 start 内部由 LLM 按简历生成开场问题
-            question, audio = interview.start(session.state, session.resume)
+            question = interview.start(session.state, session.resume)
             session.started = True
     except Exception as exc:
         raise _fail(exc, "开始面试") from exc
+    # 只回文字，不回语音 —— 前端拿到文字立刻显示，再异步请求 /api/tts
     return {
         "question": question,
-        "audio": _b64(audio),
         "resume_used": bool(session.resume),
     }
+
+
+@app.post("/api/tts")
+def synthesize(payload: dict) -> dict:
+    """把一段文字合成为语音。前端异步调用，不阻塞文字显示。
+
+    单独拆出来是因为 TTS 要联网、要 1-2 秒：若塞在 /api/start 或 /api/turn 里，
+    用户得白等这段时间才看得到面试官说了什么。
+    """
+    text = str((payload or {}).get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text 不能为空")
+    if len(text) > config.TTS_MAX_CHARS:
+        raise HTTPException(status_code=400, detail=f"文字过长（上限 {config.TTS_MAX_CHARS} 字）")
+
+    try:
+        audio = tts.synthesize(text)
+    except Exception as exc:
+        raise _fail(exc, "语音合成") from exc
+    return {"audio": _b64(audio)}
 
 
 @app.post("/api/turn")
@@ -221,7 +241,6 @@ def turn(
         "attention_note": result.attention_note,
         "cheating": result.cheating,
         "question": result.question,
-        "audio": _b64(result.audio),
         "finished": result.finished,
         # 本轮 LLM 是否按格式返回。False = 走了兜底（问题可能不是真问题），
         # 前端据此给个提示，别让人以为模型正常答了

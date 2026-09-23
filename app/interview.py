@@ -50,7 +50,6 @@ class TurnResult:
     attention_note: str
     cheating: bool
     question: str          # 下一个问题（要播报的内容）
-    audio: bytes           # 上面那句话的 TTS 音频
     finished: bool
     parsed: bool = True    # 本轮 LLM 是否按约定格式返回；False = 走了兜底
     fallback: bool = False  # 回答是否来自题库预设（而非真实的语音转写）
@@ -134,8 +133,11 @@ def _fallback_answer(state: InterviewState, turn_index: int) -> str:
     return preset_answer(turn_index)
 
 
-def start(state: InterviewState, resume: str = "") -> tuple[str, bytes]:
-    """开场：给出第一个问题。返回 (问题文本, TTS 音频)。
+def start(state: InterviewState, resume: str = "") -> str:
+    """开场：给出第一个问题，返回问题文本。
+
+    **不在这里合成语音**：TTS 要联网、要 1-2 秒，放在主链路里会让用户
+    白等这段时间才能看到文字。改为前端拿到文字先显示，再异步请求 /api/tts。
 
     有简历时，开场问题由 LLM 基于简历生成；生成失败则退回题库开场白 ——
     不能让一次 LLM 抖动就把整场面试卡在开始。
@@ -156,14 +158,10 @@ def start(state: InterviewState, resume: str = "") -> tuple[str, bytes]:
         question = fallback if isinstance(fallback, str) and fallback.strip() \
             else _FALLBACK_BANK["opening"]
 
-    # 同 run_turn：先做最容易失败的一步（TTS 要联网），成功了再改 state，
-    # 免得合成失败后 state 停在半路、用户反复点开始却只看到 500
-    audio = tts.synthesize(question)
-
     state.current_question = question
     state.history = [{"role": "assistant", "content": question}]
     state.finished = False
-    return question, audio
+    return question
 
 
 def run_turn(state: InterviewState, audio_bytes: bytes = b"", frames: list[bytes] | None = None) -> TurnResult:
@@ -192,13 +190,10 @@ def run_turn(state: InterviewState, audio_bytes: bytes = b"", frames: list[bytes
     next_question = reply["next_question"]
     spoken = next_question if not finished else _closing()
 
-    # 5. 说：合成语音。这一步要联网，是最容易失败的一环，
-    #    所以放在提交状态之前 —— 失败时 state 保持原样，用户重试仍是同一轮；
-    #    否则这一轮已经记进 records，重试会变成两轮，
-    #    而且报告里那轮的「问题」是从没被念出来过的那句，问与答对不上。
-    audio = tts.synthesize(spoken)
-
-    # 6. 全部成功，提交状态
+    # 5. 提交状态。
+    #    **语音合成不在这里做**：TTS 要联网、要 1-2 秒，放在主链路里会让用户
+    #    白等这段时间才看得到文字。改为前端拿到文字先显示，再异步请求 /api/tts。
+    #    顺带消掉了「TTS 失败导致状态半改」那一类问题 —— 现在这里全是本地操作。
     record = TurnRecord(
         index=index,
         question=state.current_question,
@@ -227,7 +222,6 @@ def run_turn(state: InterviewState, audio_bytes: bytes = b"", frames: list[bytes
         attention_note=record.attention_note,
         cheating=record.cheating,
         question=spoken,
-        audio=audio,
         finished=finished,
         parsed=reply.get("_parsed", True),
         fallback=fallback,

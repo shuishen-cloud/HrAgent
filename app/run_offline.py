@@ -96,8 +96,20 @@ def main() -> int:
     else:
         audio_dir.mkdir(parents=True, exist_ok=True)
 
+    def _speak(text: str) -> bytes:
+        """题的语音要**单独**合成 —— 引擎不再内嵌 TTS 了。
+
+        TTS 从主链路拆走的理由见 app/interview.py：它要联网、要 1-2 秒，
+        留在里面会让用户白等这段时间才看得到文字。离线跑这里只是把音频存盘，
+        所以补上这一步。
+        """
+        if args.no_tts or not text or not text.strip():
+            return b""
+        return tts.synthesize(text)
+
     state = interview.InterviewState()
-    question, audio = interview.start(state)
+    question = interview.start(state)
+    audio = _speak(question)
     if audio:
         (audio_dir / "00_opening.mp3").write_bytes(audio)
 
@@ -127,8 +139,9 @@ def main() -> int:
             print("　　⚠️ 疑似作弊：画面中出现多人或异常")
         print(f"面试官：{result.question}\n")
 
-        if not args.no_tts and result.audio:
-            (audio_dir / f"{i + 1:02d}_question.mp3").write_bytes(result.audio)
+        audio = _speak(result.question)
+        if audio:
+            (audio_dir / f"{i + 1:02d}_question.mp3").write_bytes(audio)
 
         if result.finished:
             print(f"（面试在第 {i + 1} 轮结束）\n")

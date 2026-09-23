@@ -31,7 +31,7 @@ def client(monkeypatch):
         state.current_question = "请自我介绍"
         state.history = [{"role": "assistant", "content": "请自我介绍"}]
         state.finished = False
-        return "请自我介绍", b"MP3"
+        return "请自我介绍"          # 只回文字，语音走独立的 /api/tts
 
     def fake_run_turn(state, audio_bytes=b"", frames=None):
         frames = frames or []
@@ -46,7 +46,7 @@ def client(monkeypatch):
         return interview.TurnResult(
             answer="我是张三", score=8, comment="不错", focused=True,
             attention_note="正对镜头", cheating=False,
-            question="下一题？", audio=b"MP3", finished=state.finished,
+            question="下一题？", finished=state.finished,
         )
 
     monkeypatch.setattr(interview, "start", fake_start)
@@ -106,7 +106,8 @@ def test_开始后返回问题和语音(client):
     assert res.status_code == 200
     data = res.json()
     assert data["question"] == "请自我介绍"
-    assert data["audio"]                      # base64 非空
+    # 语音不在这里返回 —— 前端拿到文字后异步请求 /api/tts
+    assert "audio" not in data
     assert client.get("/api/status").json()["started"] is True
 
 
@@ -132,8 +133,8 @@ def test_发送回答返回完整结果(client):
     assert data["focused"] is True
     assert data["cheating"] is False
     assert data["question"] == "下一题？"
-    assert data["audio"]
     assert data["finished"] is False
+    assert "audio" not in data
 
 
 def test_画面帧会传给引擎(client, monkeypatch):
@@ -350,19 +351,36 @@ def real_engine_client(monkeypatch):
     return TestClient(main.app)
 
 
-def test_接口里能真的执行_asyncio_run(real_engine_client):
-    """回归：async 端点会让 asyncio.run 抛
-    'cannot be called from a running event loop'，导致整轮 502。"""
+def test_一轮接口走真实引擎不报错(real_engine_client):
+    """run_turn 走真实代码路径（只桩最底层叶子依赖）。"""
     client = real_engine_client
     client.post("/api/start")
     res = _answer(client, frames=["focused_01.jpg"])
 
     assert res.status_code == 200, res.json()
     assert res.json()["answer"] == "转写结果"
-    assert res.json()["audio"]            # TTS 真的产出了音频
 
 
-def test_开场接口也走真实_tts(real_engine_client):
-    res = real_engine_client.post("/api/start")
-    assert res.status_code == 200
-    assert res.json()["audio"]
+def test_tts_接口能真的执行_asyncio_run(real_engine_client):
+    """回归：TTS 内部的 asyncio.run 不能在事件循环线程里跑。
+
+    端点必须是**同步 def**（FastAPI 丢线程池，那里没有运行中的循环）。
+    写成 async def 就会抛
+    'asyncio.run() cannot be called from a running event loop'。
+    """
+    res = real_engine_client.post("/api/tts", json={"text": "你好"})
+
+    assert res.status_code == 200, res.json()
+    assert res.json()["audio"]            # base64 非空，说明真的合成了
+
+
+def test_tts_接口拒绝空文本(real_engine_client):
+    res = real_engine_client.post("/api/tts", json={"text": "   "})
+    assert res.status_code == 400
+
+
+def test_tts_接口拒绝超长文本(real_engine_client, monkeypatch):
+    monkeypatch.setattr(interview.config, "TTS_MAX_CHARS", 10)
+    res = real_engine_client.post("/api/tts", json={"text": "很长的文字" * 20})
+    assert res.status_code == 400
+    assert "过长" in res.json()["detail"]
