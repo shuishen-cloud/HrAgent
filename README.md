@@ -1,5 +1,7 @@
 # HrAgent — 多模态 AI 面试官
 
+> 前端优化来自 [qui-renjie](https://github.com/qiu-renjie) 以及 [RuanJingwen-01](https://github.com/RuanJingwen-01)。
+
 一个能**看**（摄像头画面）和**听**（语音回答）的 AI 面试官：主动提问、追问、评估候选人，最终产出面试报告。
 
 上传候选人简历后，面试官会**围绕简历出题**并深挖细节；不上传则走内置固定题库。
