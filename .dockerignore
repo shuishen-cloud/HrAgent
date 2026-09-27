@@ -1,0 +1,8 @@
+.git
+.venv
+.env*
+__pycache__/
+*.pyc
+reports/
+*.md
+# 注意：tests/ 不能排除 —— tests/fixtures 是运行时的 /fixtures 路由（模拟模式样本）
