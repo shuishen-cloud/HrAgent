@@ -116,6 +116,7 @@ HrAgent/
 ├── reports/             # 产出的报告（不入库）
 ├── requirements.txt
 ├── README.md
+├── 部署.md               # 部署到远程服务器的坑与检查清单
 └── 工作管理.md           # 任务清单 + 进度 + 决策记录
 ```
 
@@ -146,6 +147,15 @@ uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
 ```bash
 scripts/curl_demo.sh --turns 2
 ```
+
+### 部署到远程服务器
+
+见 **[部署.md](部署.md)**。先看这三条，都是会直接卡住的：
+
+1. **必须 HTTPS** —— `getUserMedia` 只在安全上下文可用，
+   `http://<公网IP>:8000` 打开时摄像头麦克风**完全用不了**（浏览器行为，不是代码问题）
+2. **只能单 worker** —— 会话是进程内单例，`--workers 4` 会让面试状态错乱
+3. **模型缓存 3.2GB** —— 建议 rsync 而非让服务器现场下载（实测大文件会中途挂起）
 
 ## 环境与已知问题（本机实测）
 
